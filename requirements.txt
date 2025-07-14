@@ -11,7 +11,7 @@ espeakng-loader
 faster_whisper
 imageio-ffmpeg
 funasr==1.1.5
-gradio>5.0.0
+gradio==5.35.0
 grpcio>=1.58.0
 huggingface-hub
 requests
