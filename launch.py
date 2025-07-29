@@ -146,6 +146,51 @@ except ImportError:
     F5_TTS_AVAILABLE = False
     print("⚠️ F5-TTS not available. Some features will be disabled.")
 
+# Higgs Audio imports
+try:
+    with suppress_specific_warnings():
+        from higgs_audio_handler import generate_higgs_audio_tts, get_higgs_audio_handler
+    HIGGS_AUDIO_AVAILABLE = True
+    print("✅ Higgs Audio handler loaded")
+except ImportError:
+    HIGGS_AUDIO_AVAILABLE = False
+    print("⚠️ Higgs Audio not available. Some features will be disabled.")
+
+# ===== HIGGS AUDIO MODEL MANAGEMENT =====
+def init_higgs_audio():
+    """Initialize Higgs Audio model"""
+    if not HIGGS_AUDIO_AVAILABLE:
+        return False, "❌ Higgs Audio not available"
+    
+    try:
+        handler = get_higgs_audio_handler()
+        success = handler.initialize_engine()
+        if success:
+            MODEL_STATUS['higgs_audio'] = {'loaded': True}
+            return True, "✅ Higgs Audio model loaded successfully"
+        else:
+            return False, "❌ Failed to initialize Higgs Audio engine"
+    except Exception as e:
+        return False, f"❌ Error loading Higgs Audio: {str(e)}"
+
+def unload_higgs_audio():
+    """Unload Higgs Audio model"""
+    try:
+        handler = get_higgs_audio_handler()
+        handler.engine = None  # Clear the engine
+        MODEL_STATUS['higgs_audio'] = {'loaded': False}
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return "✅ Higgs Audio model unloaded"
+    except Exception as e:
+        return f"⚠️ Error unloading Higgs Audio: {str(e)}"
+
 # eBook Converter imports
 try:
     with suppress_specific_warnings():
@@ -460,6 +505,24 @@ def generate_conversation_audio_simple(
                         0.15,  # cross_fade
                         False, # remove_silence
                         None,  # seed
+                        effects_settings,
+                        audio_format,
+                        skip_file_saving=True
+                    )
+                elif selected_engine == 'Higgs Audio':
+                    print(f"🎙️ Using Higgs Audio for {speaker}")
+                    result = generate_higgs_audio_tts(
+                        text,
+                        ref_audio,
+                        "",    # ref_text
+                        "EMPTY", # voice_preset
+                        "",    # system_prompt
+                        1.0,   # temperature
+                        0.95,  # top_p
+                        50,    # top_k
+                        1024,  # max_tokens
+                        7,     # ras_win_len
+                        2,     # ras_win_max_num_repeat
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
@@ -1104,7 +1167,8 @@ MODEL_STATUS = {
     'kokoro': {'loaded': False, 'loading': False},
     'fish_speech': {'loaded': False, 'loading': False},
     'indextts': {'loaded': False, 'loading': False},
-    'f5_tts': {'loaded': False, 'loading': False, 'models': {}}
+    'f5_tts': {'loaded': False, 'loading': False, 'models': {}},
+    'higgs_audio': {'loaded': False, 'loading': False}
 }
 
 def init_chatterbox():
@@ -1588,6 +1652,17 @@ def get_model_status():
             status_text += "🎵 **F5-TTS:** ⭕ Not loaded\n"
     else:
         status_text += "🎵 **F5-TTS:** ❌ Not available\n"
+    
+    # Higgs Audio status
+    if HIGGS_AUDIO_AVAILABLE:
+        if MODEL_STATUS['higgs_audio']['loading']:
+            status_text += "🎙️ **Higgs Audio:** ⏳ Loading...\n"
+        elif MODEL_STATUS['higgs_audio']['loaded']:
+            status_text += "🎙️ **Higgs Audio:** ✅ Loaded\n"
+        else:
+            status_text += "🎙️ **Higgs Audio:** ⭕ Not loaded\n"
+    else:
+        status_text += "🎙️ **Higgs Audio:** ❌ Not available\n"
     
     return status_text
 
@@ -2944,6 +3019,17 @@ def convert_ebook_to_audiobook(
     f5_cross_fade: float = 0.15,
     f5_remove_silence: bool = False,
     f5_seed: int = 0,
+    # Higgs Audio parameters
+    higgs_ref_audio: str = None,
+    higgs_ref_text: str = None,
+    higgs_voice_preset: str = "EMPTY",
+    higgs_system_prompt: str = "",
+    higgs_temperature: float = 1.0,
+    higgs_top_p: float = 0.95,
+    higgs_top_k: int = 50,
+    higgs_max_tokens: int = 1024,
+    higgs_ras_win_len: int = 7,
+    higgs_ras_win_max_num_repeat: int = 2,
     # Effects parameters
     gain_db: float = 0,
     enable_eq: bool = False,
@@ -3050,6 +3136,13 @@ def convert_ebook_to_audiobook(
                 audio_result, status = generate_f5_tts(
                     chunk['content'], f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade,
                     f5_remove_silence, f5_seed, effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
+                )
+            elif tts_engine == "Higgs Audio":
+                audio_result, status = generate_higgs_audio_tts(
+                    chunk['content'], higgs_ref_audio, higgs_ref_text, higgs_voice_preset,
+                    higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
+                    higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                    effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
                 )
             else:
                 return None, f"❌ Invalid TTS engine: {tts_engine}"
@@ -3253,6 +3346,17 @@ def generate_unified_tts(
     f5_cross_fade: float = 0.15,
     f5_remove_silence: bool = False,
     f5_seed: int = 0,
+    # Higgs Audio parameters
+    higgs_ref_audio: str = None,
+    higgs_ref_text: str = None,
+    higgs_voice_preset: str = "EMPTY",
+    higgs_system_prompt: str = "",
+    higgs_temperature: float = 1.0,
+    higgs_top_p: float = 0.95,
+    higgs_top_k: int = 50,
+    higgs_max_tokens: int = 1024,
+    higgs_ras_win_len: int = 7,
+    higgs_ras_win_max_num_repeat: int = 2,
     # Effects parameters
     gain_db: float = 0,
     enable_eq: bool = False,
@@ -3316,6 +3420,13 @@ def generate_unified_tts(
         return generate_f5_tts(
             text_input, f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade,
             f5_remove_silence, f5_seed, effects_settings, audio_format
+        )
+    elif tts_engine == "Higgs Audio":
+        return generate_higgs_audio_tts(
+            text_input, higgs_ref_audio, higgs_ref_text, higgs_voice_preset,
+            higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
+            higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+            effects_settings, audio_format
         )
     else:
         return None, "❌ Invalid TTS engine selected"
@@ -4587,6 +4698,32 @@ def create_gradio_interface():
                             scale=1
                         )
                 
+                # Higgs Audio Management - Compact
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("🎙️ **Higgs Audio**", elem_classes=["fade-in"])
+                        higgs_status = gr.Markdown(
+                            value="⭕ Not loaded" if HIGGS_AUDIO_AVAILABLE else "❌ Not available",
+                            elem_classes=["fade-in"]
+                        )
+                    with gr.Row():
+                        load_higgs_btn = gr.Button(
+                            "🔄 Load",
+                            variant="primary",
+                            size="sm",
+                            visible=HIGGS_AUDIO_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                        unload_higgs_btn = gr.Button(
+                            "🗑️ Unload",
+                            variant="secondary",
+                            size="sm",
+                            visible=HIGGS_AUDIO_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                
                 # System Cleanup - Compact
                 with gr.Column():
                     with gr.Row():
@@ -4613,7 +4750,7 @@ def create_gradio_interface():
                     with gr.TabItem("📝 TEXT TO SYNTHESIZE", id="single_voice"):
                         # Text input with enhanced styling
                         text = gr.Textbox(
-                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS and F5 TTS for custom voice cloning or Kokoro TTS for high-quality pre-trained voices.",
+                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS, Higgs audio TTS and F5 TTS for custom voice cloning or Kokoro TTS for high-quality pre-trained voices.",
                             label="📝 Text to synthesize",
                             lines=5,
                             placeholder="Enter your text here...",
@@ -4870,9 +5007,10 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                             ("🗣️ Kokoro TTS", "Kokoro TTS"),
                                             ("🐟 Fish Speech", "Fish Speech"),
                                             ("🎯 IndexTTS", "IndexTTS"),
-                                            ("🎵 F5-TTS", "F5-TTS")
+                                            ("🎵 F5-TTS", "F5-TTS"),
+                                            ("🎙️ Higgs Audio", "Higgs Audio")
                                         ],
-                                        value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS",
+                                        value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio",
                                         label="🎯 TTS Engine for Audiobook",
                                         elem_classes=["fade-in"]
                                     )
@@ -4970,9 +5108,10 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         ("🗣️ Kokoro TTS - Pre-trained Voices", "Kokoro TTS"),
                         ("🐟 Fish Speech - Natural TTS", "Fish Speech"),
                         ("🎯 IndexTTS - Industrial Quality", "IndexTTS"),
-                        ("🎵 F5-TTS - Flow Matching TTS", "F5-TTS")
+                        ("🎵 F5-TTS - Flow Matching TTS", "F5-TTS"),
+                        ("🎙️ Higgs Audio - Advanced Multimodal TTS", "Higgs Audio")
                     ],
-                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS",
+                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio",
                     label="🎯 Select TTS Engine",
                     info="Choose your preferred text-to-speech engine (auto-selects when you load a model)",
                     elem_classes=["fade-in"]
@@ -5408,6 +5547,110 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         f5_cross_fade = gr.Slider(visible=False, value=0.15)
                         f5_remove_silence = gr.Checkbox(visible=False, value=False)
                         f5_seed = gr.Number(visible=False, value=0)
+            
+            # Higgs Audio Tab
+            with gr.TabItem("🎙️ Higgs Audio", id="higgs_tab"):
+                if HIGGS_AUDIO_AVAILABLE:
+                    with gr.Group() as higgs_audio_controls:
+                        gr.Markdown("**🎙️ Higgs Audio - Advanced Multimodal TTS**")
+                        gr.Markdown("*💡 State-of-the-art voice cloning with multimodal capabilities (Use wav files not mp3)*", elem_classes=["fade-in"])
+                        
+                        # Generation settings
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                higgs_ref_audio = gr.Audio(
+                                    sources=["upload", "microphone"],
+                                    type="filepath",
+                                    label="🎤 Reference Audio (Optional)",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_ref_text = gr.Textbox(
+                                    label="📝 Reference Text (Optional)",
+                                    placeholder="Text spoken in reference audio",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_voice_preset = gr.Dropdown(
+                                    label="🗣️ Voice Preset",
+                                    choices=["EMPTY"] + (get_higgs_audio_handler().get_available_voice_presets()[1:] if HIGGS_AUDIO_AVAILABLE else []),
+                                    value="EMPTY",
+                                    info="Select a predefined voice or use custom reference audio",
+                                    elem_classes=["fade-in"]
+                                )
+                            
+                            with gr.Column(scale=1):
+                                higgs_temperature = gr.Slider(
+                                    0.0, 1.5, step=0.1,
+                                    label="🌡️ Temperature",
+                                    value=1.0,
+                                    info="Creativity vs consistency",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_top_p = gr.Slider(
+                                    0.1, 1.0, step=0.05,
+                                    label="🎯 Top-P",
+                                    value=0.95,
+                                    info="Nucleus sampling",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_top_k = gr.Slider(
+                                    1, 100, step=1,
+                                    label="🔝 Top-K",
+                                    value=50,
+                                    info="Top-K sampling",
+                                    elem_classes=["fade-in"]
+                                )
+                        
+                        with gr.Accordion("🔧 Advanced Higgs Audio Settings", open=False, elem_classes=["fade-in"]):
+                            higgs_system_prompt = gr.Textbox(
+                                label="💬 System Prompt (Optional)",
+                                placeholder="Custom system prompt for generation context",
+                                lines=3,
+                                elem_classes=["fade-in"]
+                            )
+                            
+                            with gr.Row():
+                                higgs_max_tokens = gr.Slider(
+                                    128, 4096, step=64,
+                                    label="📏 Max Tokens",
+                                    value=1024,
+                                    info="Maximum generation length",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_ras_win_len = gr.Slider(
+                                    0, 10, step=1,
+                                    label="🪟 RAS Window Length",
+                                    value=7,
+                                    info="Repetition avoidance window",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                higgs_ras_win_max_num_repeat = gr.Slider(
+                                    1, 10, step=1,
+                                    label="🔄 RAS Max Repeats",
+                                    value=2,
+                                    info="Max repetitions in window",
+                                    elem_classes=["fade-in"]
+                                )
+                else:
+                    # Placeholder when Higgs Audio is not available
+                    with gr.Group():
+                        gr.Markdown("<div style='text-align: center; padding: 40px; opacity: 0.5;'>**🎙️ Higgs Audio** - ⚠️ Not available - please check installation</div>")
+                        # Create dummy components
+                        higgs_ref_audio = gr.Audio(visible=False, value=None)
+                        higgs_ref_text = gr.Textbox(visible=False, value="")
+                        higgs_voice_preset = gr.Dropdown(visible=False, choices=["EMPTY"], value="EMPTY")
+                        higgs_system_prompt = gr.Textbox(visible=False, value="")
+                        higgs_temperature = gr.Slider(visible=False, value=1.0)
+                        higgs_top_p = gr.Slider(visible=False, value=0.95)
+                        higgs_top_k = gr.Slider(visible=False, value=50)
+                        higgs_max_tokens = gr.Slider(visible=False, value=1024)
+                        higgs_ras_win_len = gr.Slider(visible=False, value=7)
+                        higgs_ras_win_max_num_repeat = gr.Slider(visible=False, value=2)
         
 
         
@@ -5573,6 +5816,30 @@ Alice: I went to Japan. It was absolutely incredible!""",
             # Don't change engine selection when unloading
             return indextts_status_text
 
+        def handle_load_higgs():
+            success, message = init_higgs_audio()
+            if success:
+                higgs_status_text = "✅ Loaded (Auto-selected)"
+                # Auto-select Higgs Audio engine when loaded
+                selected_engine = "Higgs Audio"
+                # Auto-switch to Higgs Audio tab
+                selected_tab = gr.update(selected="higgs_tab")
+            else:
+                higgs_status_text = "❌ Failed to load"
+                selected_engine = gr.update()  # No change to current selection
+                selected_tab = gr.update()  # No tab change
+            
+            if EBOOK_CONVERTER_AVAILABLE:
+                return higgs_status_text, selected_engine, selected_engine, selected_tab
+            else:
+                return higgs_status_text, selected_engine, selected_tab
+
+        def handle_unload_higgs():
+            message = unload_higgs_audio()
+            higgs_status_text = "⭕ Not loaded"
+            # Don't change engine selection when unloading
+            return higgs_status_text
+
         def handle_clear_temp_files():
             """Handle clearing Gradio temporary files and reset audio components."""
             result_message = clear_gradio_temp_files()
@@ -5627,6 +5894,17 @@ Alice: I went to Japan. It was absolutely incredible!""",
             unload_indextts_btn.click(
                 fn=handle_unload_indextts,
                 outputs=[indextts_status]
+            )
+        
+        # Higgs Audio management
+        if HIGGS_AUDIO_AVAILABLE:
+            load_higgs_btn.click(
+                fn=handle_load_higgs,
+                outputs=[higgs_status, tts_engine, ebook_tts_engine, engine_tabs] if EBOOK_CONVERTER_AVAILABLE else [higgs_status, tts_engine, engine_tabs]
+            )
+            unload_higgs_btn.click(
+                fn=handle_unload_higgs,
+                outputs=[higgs_status]
             )
         
         # F5-TTS management functions
@@ -5765,6 +6043,9 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 fish_ref_audio, fish_ref_text, fish_temperature, fish_top_p, fish_repetition_penalty, fish_max_tokens, fish_seed,
                 indextts_ref_audio, indextts_temperature, indextts_seed,
                 f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed,
+                higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
+                higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
+                higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                 gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                 enable_reverb, reverb_room, reverb_damping, reverb_wet,
                 enable_echo, echo_delay, echo_decay,
@@ -6127,6 +6408,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 idx_ref_audio, idx_temp, idx_seed,
                 # F5-TTS parameters
                 f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed_val,
+                # Higgs Audio parameters
+                higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
+                higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
+                higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                 gain, eq_en, eq_b, eq_m, eq_t,
                 rev_en, rev_room, rev_damp, rev_wet,
                 echo_en, echo_del, echo_dec,
@@ -6147,6 +6432,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     idx_ref_audio, idx_temp, idx_seed,
                     # F5-TTS parameters
                     f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed_val,
+                    # Higgs Audio parameters
+                    higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
+                    higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
+                    higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                     gain, eq_en, eq_b, eq_m, eq_t,
                     rev_en, rev_room, rev_damp, rev_wet,
                     echo_en, echo_del, echo_dec,
@@ -6204,6 +6493,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     indextts_ref_audio, indextts_temperature, indextts_seed,
                     # F5-TTS parameters
                     f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed,
+                    # Higgs Audio parameters
+                    higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
+                    higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
+                    higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                     # Effects parameters
                     gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                     enable_reverb, reverb_room, reverb_damping, reverb_wet,

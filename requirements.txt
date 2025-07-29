@@ -78,4 +78,12 @@ deepspeed==0.16.5
 #f5
 f5-tts
 
+#Higgs
+dacite
+boto3==1.35.36
+s3fs
+json_repair
+vector_quantize_pytorch
+click
+
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
