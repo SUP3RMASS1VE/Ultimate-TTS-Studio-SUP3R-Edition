@@ -31,6 +31,10 @@ If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing
 
 ## ⚠️ Notice: Major App Update
 
+### 📅 July 29, 2025
+
+This recent update brings Higgs-Audio TTS:
+
 ### 📅 June 23, 2025
 
 This recent update brings a few UI improvements focused on clarity and usability:
