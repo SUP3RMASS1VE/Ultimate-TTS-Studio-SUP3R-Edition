@@ -156,6 +156,16 @@ except ImportError:
     HIGGS_AUDIO_AVAILABLE = False
     print("⚠️ Higgs Audio not available. Some features will be disabled.")
 
+# KittenTTS imports
+try:
+    with suppress_specific_warnings():
+        from kitten_tts_handler import generate_kitten_tts, get_kitten_tts_handler, init_kitten_tts, unload_kitten_tts, KITTEN_VOICES
+    KITTEN_TTS_AVAILABLE = True
+    print("✅ KittenTTS handler loaded")
+except ImportError:
+    KITTEN_TTS_AVAILABLE = False
+    print("⚠️ KittenTTS not available. Some features will be disabled.")
+
 # ===== HIGGS AUDIO MODEL MANAGEMENT =====
 def init_higgs_audio():
     """Initialize Higgs Audio model"""
@@ -190,6 +200,42 @@ def unload_higgs_audio():
         return "✅ Higgs Audio model unloaded"
     except Exception as e:
         return f"⚠️ Error unloading Higgs Audio: {str(e)}"
+
+# ===== KITTEN TTS MODEL MANAGEMENT =====
+def init_kitten_tts_model():
+    """Initialize KittenTTS model"""
+    if not KITTEN_TTS_AVAILABLE:
+        return False, "❌ KittenTTS not available"
+    
+    try:
+        MODEL_STATUS['kitten_tts']['loading'] = True
+        success, message = init_kitten_tts()
+        if success:
+            MODEL_STATUS['kitten_tts'] = {'loaded': True, 'loading': False}
+            return True, "✅ KittenTTS model loaded successfully"
+        else:
+            MODEL_STATUS['kitten_tts']['loading'] = False
+            return False, message
+    except Exception as e:
+        MODEL_STATUS['kitten_tts']['loading'] = False
+        return False, f"❌ Error loading KittenTTS: {str(e)}"
+
+def unload_kitten_tts_model():
+    """Unload KittenTTS model"""
+    try:
+        message = unload_kitten_tts()
+        MODEL_STATUS['kitten_tts'] = {'loaded': False, 'loading': False}
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return message
+    except Exception as e:
+        return f"⚠️ Error unloading KittenTTS: {str(e)}"
 
 # eBook Converter imports
 try:
@@ -523,6 +569,21 @@ def generate_conversation_audio_simple(
                         1024,  # max_tokens
                         7,     # ras_win_len
                         2,     # ras_win_max_num_repeat
+                        effects_settings,
+                        audio_format,
+                        skip_file_saving=True
+                    )
+                elif selected_engine == 'KittenTTS':
+                    print(f"🐱 Using KittenTTS for {speaker}")
+                    # For conversation mode, assign different voices to different speakers
+                    available_voices = ['expr-voice-2-f', 'expr-voice-2-m', 'expr-voice-3-f', 'expr-voice-3-m', 
+                                      'expr-voice-4-f', 'expr-voice-4-m', 'expr-voice-5-f', 'expr-voice-5-m']
+                    speaker_index = speakers.index(speaker) if speaker in speakers else 0
+                    kitten_voice = available_voices[speaker_index % len(available_voices)]
+                    print(f"🎤 Assigned voice '{kitten_voice}' to speaker '{speaker}'")
+                    result = generate_kitten_tts(
+                        text,
+                        kitten_voice,
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
@@ -940,6 +1001,169 @@ def generate_kokoro_conversation_tts(text, speaker, speakers_list, effects_setti
     except Exception as e:
         return None, f"❌ Kokoro conversation error: {str(e)}"
 
+def generate_conversation_audio_kitten(
+    conversation_script,
+    kitten_voices,  # List of selected KittenTTS voices for each speaker
+    selected_engine="KittenTTS",
+    conversation_pause_duration=0.8,
+    speaker_transition_pause=0.3,
+    effects_settings=None,
+    audio_format="wav"
+):
+    """Generate a complete conversation with KittenTTS using selected voices for each speaker."""
+    try:
+        print("🐱 Starting KittenTTS conversation generation...")
+        
+        # Parse the conversation script
+        conversation, parse_error = parse_conversation_script(conversation_script)
+        if parse_error:
+            return None, f"❌ Script parsing error: {parse_error}"
+        
+        if not conversation:
+            return None, "❌ No valid conversation found in script"
+        
+        print(f"📝 Parsed {len(conversation)} conversation lines")
+        
+        # Get unique speakers and map them to selected KittenTTS voices
+        speakers = get_speaker_names_from_script(conversation_script)
+        print(f"🎤 Found speakers: {speakers}")
+        
+        # Map speakers to selected KittenTTS voices
+        speaker_voice_map = {}
+        for i, speaker in enumerate(speakers):
+            if i < len(kitten_voices) and kitten_voices[i] is not None:
+                speaker_voice_map[speaker] = kitten_voices[i]
+                print(f"🐱 {speaker} -> {kitten_voices[i]}")
+            else:
+                # Fallback to default voices if not enough selections
+                available_voices = ['expr-voice-2-f', 'expr-voice-2-m', 'expr-voice-3-f', 'expr-voice-3-m', 
+                                  'expr-voice-4-f', 'expr-voice-4-m', 'expr-voice-5-f', 'expr-voice-5-m']
+                fallback_voice = available_voices[i % len(available_voices)]
+                speaker_voice_map[speaker] = fallback_voice
+                print(f"🐱 {speaker} -> {fallback_voice} (fallback)")
+        
+        conversation_audio_chunks = []
+        conversation_info = []
+        sample_rate = None
+        
+        # Generate audio for each conversation line
+        for i, line in enumerate(conversation):
+            speaker = line['speaker']
+            text = line['text']
+            
+            print(f"🐱 Generating line {i+1}/{len(conversation)}: {speaker} - \"{text[:30]}...\"")
+            
+            kitten_voice = speaker_voice_map.get(speaker, 'expr-voice-2-f')
+            
+            # Generate audio using KittenTTS
+            try:
+                result = generate_kitten_tts(
+                    text,
+                    kitten_voice,
+                    effects_settings,
+                    audio_format,
+                    skip_file_saving=True
+                )
+                
+                if result[0] is None:
+                    return None, f"❌ Error generating audio for {speaker}: {result[1]}"
+                
+                audio_data, info_text = result
+                if audio_data is None:
+                    return None, f"❌ No audio generated for {speaker}"
+                
+                # Extract audio array from tuple
+                if isinstance(audio_data, tuple):
+                    sample_rate, line_audio = audio_data
+                else:
+                    return None, f"❌ Invalid audio format for {speaker}"
+                
+                conversation_audio_chunks.append(line_audio)
+                conversation_info.append({
+                    'speaker': speaker,
+                    'text': text[:50] + ('...' if len(text) > 50 else ''),
+                    'duration': len(line_audio) / sample_rate,
+                    'samples': len(line_audio),
+                    'voice': kitten_voice
+                })
+                
+                print(f"✅ Generated {len(line_audio)} samples for {speaker} using {kitten_voice}")
+                
+            except Exception as gen_error:
+                import traceback
+                traceback.print_exc()
+                return None, f"❌ Error generating audio for {speaker}: {str(gen_error)}"
+        
+        # Combine all audio with proper timing (same logic as other conversation functions)
+        print("🎵 Combining conversation audio with proper timing...")
+        
+        # Calculate pause durations in samples
+        conversation_pause_samples = int(sample_rate * conversation_pause_duration)
+        transition_pause_samples = int(sample_rate * speaker_transition_pause)
+        
+        # Combine audio parts
+        final_audio_parts = []
+        
+        for i, (audio_chunk, info) in enumerate(zip(conversation_audio_chunks, conversation_info)):
+            current_speaker = info['speaker']
+            
+            # Add audio chunk
+            final_audio_parts.append(audio_chunk)
+            
+            # Add pause after each line (except the last one)
+            if i < len(conversation_audio_chunks) - 1:
+                next_speaker = conversation_info[i + 1]['speaker']
+                
+                # Different pause duration based on speaker change
+                if current_speaker != next_speaker:
+                    # Speaker transition - longer pause
+                    pause_samples = conversation_pause_samples
+                else:
+                    # Same speaker continuing - shorter pause
+                    pause_samples = transition_pause_samples
+                
+                if pause_samples > 0:
+                    pause_audio = np.zeros(pause_samples)
+                    final_audio_parts.append(pause_audio)
+        
+        # Concatenate all parts
+        final_conversation_audio = np.concatenate(final_audio_parts)
+        
+        # Save the conversation audio to outputs folder
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_base = f"conversation_kitten_tts_{timestamp}"
+            filepath, filename = save_audio_with_format(
+                final_conversation_audio, sample_rate, audio_format, output_folder, filename_base
+            )
+            print(f"💾 KittenTTS conversation saved as: {filename}")
+        except Exception as save_error:
+            print(f"Warning: Could not save conversation file: {save_error}")
+            filename = "kitten_conversation_audio"
+        
+        # Create conversation summary
+        total_duration = len(final_conversation_audio) / sample_rate
+        unique_speakers = len(set([info['speaker'] for info in conversation_info]))
+        
+        summary = {
+            'total_lines': len(conversation),
+            'unique_speakers': unique_speakers,
+            'total_duration': total_duration,
+            'speakers': list(set([info['speaker'] for info in conversation_info])),
+            'conversation_info': conversation_info,
+            'engine_used': selected_engine,
+            'saved_file': filename
+        }
+        
+        print(f"✅ KittenTTS conversation generated: {len(conversation)} lines, {unique_speakers} speakers, {total_duration:.1f}s")
+        
+        return (sample_rate, final_conversation_audio), summary
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, f"❌ KittenTTS conversation error: {str(e)}"
+
 def generate_fish_speech_simple(text, ref_audio=None, effects_settings=None, audio_format="wav"):
     """Simplified Fish Speech generation for conversation mode."""
     if not FISH_SPEECH_AVAILABLE:
@@ -1168,7 +1392,8 @@ MODEL_STATUS = {
     'fish_speech': {'loaded': False, 'loading': False},
     'indextts': {'loaded': False, 'loading': False},
     'f5_tts': {'loaded': False, 'loading': False, 'models': {}},
-    'higgs_audio': {'loaded': False, 'loading': False}
+    'higgs_audio': {'loaded': False, 'loading': False},
+    'kitten_tts': {'loaded': False, 'loading': False}
 }
 
 def init_chatterbox():
@@ -1663,6 +1888,17 @@ def get_model_status():
             status_text += "🎙️ **Higgs Audio:** ⭕ Not loaded\n"
     else:
         status_text += "🎙️ **Higgs Audio:** ❌ Not available\n"
+    
+    # KittenTTS status
+    if KITTEN_TTS_AVAILABLE:
+        if MODEL_STATUS['kitten_tts']['loading']:
+            status_text += "🐱 **KittenTTS:** ⏳ Loading...\n"
+        elif MODEL_STATUS['kitten_tts']['loaded']:
+            status_text += "🐱 **KittenTTS:** ✅ Loaded\n"
+        else:
+            status_text += "🐱 **KittenTTS:** ⭕ Not loaded\n"
+    else:
+        status_text += "🐱 **KittenTTS:** ❌ Not available\n"
     
     return status_text
 
@@ -3030,6 +3266,8 @@ def convert_ebook_to_audiobook(
     higgs_max_tokens: int = 1024,
     higgs_ras_win_len: int = 7,
     higgs_ras_win_max_num_repeat: int = 2,
+    # KittenTTS parameters
+    kitten_voice: str = "expr-voice-2-f",
     # Effects parameters
     gain_db: float = 0,
     enable_eq: bool = False,
@@ -3143,6 +3381,11 @@ def convert_ebook_to_audiobook(
                     higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
                     higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                     effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
+                )
+            elif tts_engine == "KittenTTS":
+                # Use selected voice for eBook conversion
+                audio_result, status = generate_kitten_tts(
+                    chunk['content'], kitten_voice, effects_settings, "wav", skip_file_saving=True
                 )
             else:
                 return None, f"❌ Invalid TTS engine: {tts_engine}"
@@ -3357,6 +3600,8 @@ def generate_unified_tts(
     higgs_max_tokens: int = 1024,
     higgs_ras_win_len: int = 7,
     higgs_ras_win_max_num_repeat: int = 2,
+    # KittenTTS parameters
+    kitten_voice: str = "expr-voice-2-f",
     # Effects parameters
     gain_db: float = 0,
     enable_eq: bool = False,
@@ -3427,6 +3672,10 @@ def generate_unified_tts(
             higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
             higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
             effects_settings, audio_format
+        )
+    elif tts_engine == "KittenTTS":
+        return generate_kitten_tts(
+            text_input, kitten_voice, effects_settings, audio_format
         )
     else:
         return None, "❌ Invalid TTS engine selected"
@@ -4723,6 +4972,34 @@ def create_gradio_interface():
                             elem_classes=["fade-in"],
                             scale=1
                         )
+            
+            # Second row for KittenTTS and System Cleanup
+            with gr.Row():
+                # KittenTTS Management - Compact
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("🐱 **KittenTTS**", elem_classes=["fade-in"])
+                        kitten_status = gr.Markdown(
+                            value="⭕ Not loaded" if KITTEN_TTS_AVAILABLE else "❌ Not available",
+                            elem_classes=["fade-in"]
+                        )
+                    with gr.Row():
+                        load_kitten_btn = gr.Button(
+                            "🔄 Load",
+                            variant="primary",
+                            size="sm",
+                            visible=KITTEN_TTS_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                        unload_kitten_btn = gr.Button(
+                            "🗑️ Unload",
+                            variant="secondary",
+                            size="sm",
+                            visible=KITTEN_TTS_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
                 
                 # System Cleanup - Compact
                 with gr.Column():
@@ -4750,7 +5027,7 @@ def create_gradio_interface():
                     with gr.TabItem("📝 TEXT TO SYNTHESIZE", id="single_voice"):
                         # Text input with enhanced styling
                         text = gr.Textbox(
-                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS, Higgs audio TTS and F5 TTS for custom voice cloning or Kokoro TTS for high-quality pre-trained voices.",
+                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS, Higgs audio TTS and F5 TTS for custom voice cloning or Kitten TTS and Kokoro TTS for high-quality pre-trained voices.",
                             label="📝 Text to synthesize",
                             lines=5,
                             placeholder="Enter your text here...",
@@ -4835,7 +5112,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         # Voice Samples Section for Conversation Mode
                         with gr.Group():
                             gr.Markdown("### 🎤 Voice Samples for Speakers")
-                            gr.Markdown("*Upload voice samples for each speaker (required for ChatterboxTTS, Fish Speech, IndexTTS and F5-TTS only)*")
+                            gr.Markdown("*Upload voice samples for each speaker (required for ChatterboxTTS, Fish Speech, IndexTTS and F5-TTS only - not needed for KittenTTS or Kokoro TTS)*")
                             
                             # Dynamic voice sample uploads (up to 5 speakers) and Kokoro voice selection
                             with gr.Row():
@@ -4926,6 +5203,97 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                             show_label=False
                                         )
                             
+                            # KittenTTS voice selection accordions (similar to Kokoro but for KittenTTS voices)
+                            with gr.Accordion("🐱 Speaker 1 KittenTTS Voice", open=False, visible=False, elem_classes=["fade-in"]) as speaker_1_kitten_accordion:
+                                speaker_1_kitten_voice = gr.Radio(
+                                    choices=[
+                                        'expr-voice-2-m',
+                                        'expr-voice-2-f',
+                                        'expr-voice-3-m',
+                                        'expr-voice-3-f',
+                                        'expr-voice-4-m',
+                                        'expr-voice-4-f',
+                                        'expr-voice-5-m',
+                                        'expr-voice-5-f'
+                                    ],
+                                    value='expr-voice-2-f',
+                                    label="",
+                                    elem_classes=["voice-grid"],
+                                    show_label=False
+                                )
+                            
+                            with gr.Accordion("🐱 Speaker 2 KittenTTS Voice", open=False, visible=False, elem_classes=["fade-in"]) as speaker_2_kitten_accordion:
+                                speaker_2_kitten_voice = gr.Radio(
+                                    choices=[
+                                        'expr-voice-2-m',
+                                        'expr-voice-2-f',
+                                        'expr-voice-3-m',
+                                        'expr-voice-3-f',
+                                        'expr-voice-4-m',
+                                        'expr-voice-4-f',
+                                        'expr-voice-5-m',
+                                        'expr-voice-5-f'
+                                    ],
+                                    value='expr-voice-2-m',
+                                    label="",
+                                    elem_classes=["voice-grid"],
+                                    show_label=False
+                                )
+                            
+                            with gr.Accordion("🐱 Speaker 3 KittenTTS Voice", open=False, visible=False, elem_classes=["fade-in"]) as speaker_3_kitten_accordion:
+                                speaker_3_kitten_voice = gr.Radio(
+                                    choices=[
+                                        'expr-voice-2-m',
+                                        'expr-voice-2-f',
+                                        'expr-voice-3-m',
+                                        'expr-voice-3-f',
+                                        'expr-voice-4-m',
+                                        'expr-voice-4-f',
+                                        'expr-voice-5-m',
+                                        'expr-voice-5-f'
+                                    ],
+                                    value='expr-voice-3-f',
+                                    label="",
+                                    elem_classes=["voice-grid"],
+                                    show_label=False
+                                )
+                            
+                            with gr.Accordion("🐱 Speaker 4 KittenTTS Voice", open=False, visible=False, elem_classes=["fade-in"]) as speaker_4_kitten_accordion:
+                                speaker_4_kitten_voice = gr.Radio(
+                                    choices=[
+                                        'expr-voice-2-m',
+                                        'expr-voice-2-f',
+                                        'expr-voice-3-m',
+                                        'expr-voice-3-f',
+                                        'expr-voice-4-m',
+                                        'expr-voice-4-f',
+                                        'expr-voice-5-m',
+                                        'expr-voice-5-f'
+                                    ],
+                                    value='expr-voice-3-m',
+                                    label="",
+                                    elem_classes=["voice-grid"],
+                                    show_label=False
+                                )
+                            
+                            with gr.Accordion("🐱 Speaker 5 KittenTTS Voice", open=False, visible=False, elem_classes=["fade-in"]) as speaker_5_kitten_accordion:
+                                speaker_5_kitten_voice = gr.Radio(
+                                    choices=[
+                                        'expr-voice-2-m',
+                                        'expr-voice-2-f',
+                                        'expr-voice-3-m',
+                                        'expr-voice-3-f',
+                                        'expr-voice-4-m',
+                                        'expr-voice-4-f',
+                                        'expr-voice-5-m',
+                                        'expr-voice-5-f'
+                                    ],
+                                    value='expr-voice-4-f',
+                                    label="",
+                                    elem_classes=["voice-grid"],
+                                    show_label=False
+                                )
+                            
                             # Help text for voice samples
                             gr.Markdown("""
                             <div style='margin-top: 10px; padding: 10px; background: rgba(102, 126, 234, 0.05); border-radius: 8px; border-left: 3px solid #667eea;'>
@@ -5008,9 +5376,10 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                             ("🐟 Fish Speech", "Fish Speech"),
                                             ("🎯 IndexTTS", "IndexTTS"),
                                             ("🎵 F5-TTS", "F5-TTS"),
-                                            ("🎙️ Higgs Audio", "Higgs Audio")
+                                            ("🎙️ Higgs Audio", "Higgs Audio"),
+                                            ("🐱 KittenTTS", "KittenTTS")
                                         ],
-                                        value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio",
+                                        value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio" if HIGGS_AUDIO_AVAILABLE else "KittenTTS",
                                         label="🎯 TTS Engine for Audiobook",
                                         elem_classes=["fade-in"]
                                     )
@@ -5109,9 +5478,10 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         ("🐟 Fish Speech - Natural TTS", "Fish Speech"),
                         ("🎯 IndexTTS - Industrial Quality", "IndexTTS"),
                         ("🎵 F5-TTS - Flow Matching TTS", "F5-TTS"),
-                        ("🎙️ Higgs Audio - Advanced Multimodal TTS", "Higgs Audio")
+                        ("🎙️ Higgs Audio - Advanced Multimodal TTS", "Higgs Audio"),
+                        ("🐱 KittenTTS - Mini Model TTS", "KittenTTS")
                     ],
-                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio",
+                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio" if HIGGS_AUDIO_AVAILABLE else "KittenTTS",
                     label="🎯 Select TTS Engine",
                     info="Choose your preferred text-to-speech engine (auto-selects when you load a model)",
                     elem_classes=["fade-in"]
@@ -5651,6 +6021,38 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         higgs_max_tokens = gr.Slider(visible=False, value=1024)
                         higgs_ras_win_len = gr.Slider(visible=False, value=7)
                         higgs_ras_win_max_num_repeat = gr.Slider(visible=False, value=2)
+            
+            # KittenTTS Tab
+            with gr.TabItem("🐱 KittenTTS", id="kitten_tab"):
+                if KITTEN_TTS_AVAILABLE:
+                    with gr.Group() as kitten_tts_controls:
+                        gr.Markdown("**🐱 KittenTTS - Mini Model TTS**")
+                        gr.Markdown("*💡 High-quality mini model with 8 built-in voices - no reference audio needed!*", elem_classes=["fade-in"])
+                        
+                        # Voice selection
+                        with gr.Row():
+                            with gr.Column():
+                                kitten_voice = gr.Dropdown(
+                                    label="🗣️ Voice Selection",
+                                    choices=KITTEN_VOICES if KITTEN_TTS_AVAILABLE else ["expr-voice-2-f"],
+                                    value="expr-voice-2-f",
+                                    info="Choose from 8 built-in voices (male/female variants)",
+                                    elem_classes=["fade-in"]
+                                )
+                                
+                                gr.Markdown("""
+                                **Voice Guide:**
+                                - `expr-voice-2-f/m` - Expressive female/male voice
+                                - `expr-voice-3-f/m` - Natural female/male voice  
+                                - `expr-voice-4-f/m` - Clear female/male voice
+                                - `expr-voice-5-f/m` - Warm female/male voice
+                                """, elem_classes=["fade-in"])
+                else:
+                    # Placeholder when KittenTTS is not available
+                    with gr.Group():
+                        gr.Markdown("<div style='text-align: center; padding: 40px; opacity: 0.5;'>**🐱 KittenTTS** - ⚠️ Not available - please install with: `pip install https://github.com/KittenML/KittenTTS/releases/download/0.1/kittentts-0.1.0-py3-none-any.whl`</div>")
+                        # Create dummy component
+                        kitten_voice = gr.Dropdown(visible=False, choices=["expr-voice-2-f"], value="expr-voice-2-f")
         
 
         
@@ -5840,6 +6242,30 @@ Alice: I went to Japan. It was absolutely incredible!""",
             # Don't change engine selection when unloading
             return higgs_status_text
 
+        def handle_load_kitten():
+            success, message = init_kitten_tts_model()
+            if success:
+                kitten_status_text = "✅ Loaded (Auto-selected)"
+                # Auto-select KittenTTS engine when loaded
+                selected_engine = "KittenTTS"
+                # Auto-switch to KittenTTS tab
+                selected_tab = gr.update(selected="kitten_tab")
+            else:
+                kitten_status_text = "❌ Failed to load"
+                selected_engine = gr.update()  # No change to current selection
+                selected_tab = gr.update()  # No tab change
+            
+            if EBOOK_CONVERTER_AVAILABLE:
+                return kitten_status_text, selected_engine, selected_engine, selected_tab
+            else:
+                return kitten_status_text, selected_engine, selected_tab
+
+        def handle_unload_kitten():
+            message = unload_kitten_tts_model()
+            kitten_status_text = "⭕ Not loaded"
+            # Don't change engine selection when unloading
+            return kitten_status_text
+
         def handle_clear_temp_files():
             """Handle clearing Gradio temporary files and reset audio components."""
             result_message = clear_gradio_temp_files()
@@ -5905,6 +6331,17 @@ Alice: I went to Japan. It was absolutely incredible!""",
             unload_higgs_btn.click(
                 fn=handle_unload_higgs,
                 outputs=[higgs_status]
+            )
+        
+        # KittenTTS management
+        if KITTEN_TTS_AVAILABLE:
+            load_kitten_btn.click(
+                fn=handle_load_kitten,
+                outputs=[kitten_status, tts_engine, ebook_tts_engine, engine_tabs] if EBOOK_CONVERTER_AVAILABLE else [kitten_status, tts_engine, engine_tabs]
+            )
+            unload_kitten_btn.click(
+                fn=handle_unload_kitten,
+                outputs=[kitten_status]
             )
         
         # F5-TTS management functions
@@ -6046,6 +6483,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
                 higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
                 higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                kitten_voice,
                 gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                 enable_reverb, reverb_room, reverb_damping, reverb_wet,
                 enable_echo, echo_delay, echo_decay,
@@ -6096,24 +6534,50 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         kokoro_accordion_updates.append(gr.update(visible=False))
                 
                 all_updates = audio_updates + kokoro_accordion_updates
+            elif selected_engine == "KittenTTS":
+                # For KittenTTS, show voice selection radio buttons
+                speakers_text += f"\n\n🐱 **Select KittenTTS Voices for Each Speaker:**\n"
+                speakers_text += f"Click on the speaker names below to select voices.\n"
+                speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for KittenTTS\n3. Click 'Generate Conversation'"
+                
+                # Hide voice sample uploads and Kokoro accordions, show KittenTTS accordions
+                audio_updates = []
+                kokoro_accordion_updates = []
+                kitten_accordion_updates = []
+                for i in range(5):
+                    if i < len(speakers):
+                        # Hide audio upload and Kokoro accordion, show KittenTTS accordion with speaker name
+                        audio_updates.append(gr.update(visible=False))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=True, label=f"🐱 {speakers[i]}"))
+                    else:
+                        # Hide all components
+                        audio_updates.append(gr.update(visible=False))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
             else:
                 # For other engines, show upload instructions
                 speakers_text += f"\n\n📝 **Instructions:**\n1. Upload voice samples below\n2. Select TTS engine\n3. Click 'Generate Conversation'"
                 
-                # Show/hide voice sample uploads based on number of speakers, hide Kokoro accordions
+                # Show/hide voice sample uploads based on number of speakers, hide Kokoro and KittenTTS accordions
                 audio_updates = []
                 kokoro_accordion_updates = []
+                kitten_accordion_updates = []
                 for i in range(5):
                     if i < len(speakers):
-                        # Show audio upload with speaker name, hide Kokoro voice accordion
+                        # Show audio upload with speaker name, hide voice accordions
                         audio_updates.append(gr.update(visible=True, label=f"🎤 {speakers[i]} Voice Sample"))
                         kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
                     else:
-                        # Hide both audio upload and Kokoro voice accordion
+                        # Hide all components
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
                 
-                all_updates = audio_updates + kokoro_accordion_updates
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
             
             # Show the conversation generate button when analysis is successful
             generate_btn_update = gr.update(visible=True)
@@ -6159,24 +6623,50 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                         kokoro_accordion_updates.append(gr.update(visible=False))
                 
                 all_updates = audio_updates + kokoro_accordion_updates
+            elif selected_engine == "KittenTTS":
+                # For KittenTTS, show voice selection radio buttons
+                speakers_text += f"\n\n🐱 **Select KittenTTS Voices for Each Speaker:**\n"
+                speakers_text += f"Click on the speaker names below to select voices.\n"
+                speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for KittenTTS\n3. Click 'Generate Conversation'"
+                
+                # Hide voice sample uploads and Kokoro accordions, show KittenTTS accordions
+                audio_updates = []
+                kokoro_accordion_updates = []
+                kitten_accordion_updates = []
+                for i in range(5):
+                    if i < len(speakers):
+                        # Hide audio upload and Kokoro accordion, show KittenTTS accordion with speaker name
+                        audio_updates.append(gr.update(visible=False))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=True, label=f"🐱 {speakers[i]}"))
+                    else:
+                        # Hide all components
+                        audio_updates.append(gr.update(visible=False))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
             else:
                 # For other engines, show upload instructions
                 speakers_text += f"\n\n📝 **Instructions:**\n1. Upload voice samples below\n2. Select TTS engine\n3. Click 'Generate Conversation'"
                 
-                # Show/hide voice sample uploads based on number of speakers, hide Kokoro accordions
+                # Show/hide voice sample uploads based on number of speakers, hide Kokoro and KittenTTS accordions
                 audio_updates = []
                 kokoro_accordion_updates = []
+                kitten_accordion_updates = []
                 for i in range(5):
                     if i < len(speakers):
-                        # Show audio upload with speaker name, hide Kokoro voice accordion
+                        # Show audio upload with speaker name, hide voice accordions
                         audio_updates.append(gr.update(visible=True, label=f"🎤 {speakers[i]} Voice Sample"))
                         kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
                     else:
-                        # Hide both audio upload and Kokoro voice accordion
+                        # Hide all components
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
                 
-                all_updates = audio_updates + kokoro_accordion_updates
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
             
             # Show the conversation generate button when example is loaded
             generate_btn_update = gr.update(visible=True)
@@ -6185,11 +6675,12 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
         
         def handle_clear_script():
             """Clear the conversation script and reset components."""
-            # Hide all audio components, Kokoro voice accordions, and the generate button
+            # Hide all audio components, Kokoro voice accordions, KittenTTS accordions, and the generate button
             audio_updates = [gr.update(visible=False, value=None) for _ in range(5)]
             kokoro_accordion_updates = [gr.update(visible=False) for _ in range(5)]
+            kitten_accordion_updates = [gr.update(visible=False) for _ in range(5)]
             generate_btn_update = gr.update(visible=False)
-            all_updates = audio_updates + kokoro_accordion_updates
+            all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
             return "", "No speakers detected", generate_btn_update, *all_updates
         
         def handle_tts_engine_change(selected_engine):
@@ -6209,7 +6700,7 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 gr.update(interactive=True),  # Enable transition pause slider
             )
 
-        def handle_generate_conversation_advanced(script_text, pause_duration, transition_pause, audio_format, voice_samples, kokoro_voices, selected_engine):
+        def handle_generate_conversation_advanced(script_text, pause_duration, transition_pause, audio_format, voice_samples, kokoro_voices, kitten_voices, selected_engine):
             """Generate the multi-voice conversation with voice samples or Kokoro voice selections."""
             print(f"🎭 Conversation handler called with engine: {selected_engine}")
             
@@ -6222,6 +6713,17 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     result = generate_conversation_audio_kokoro(
                         script_text,
                         kokoro_voices,
+                        selected_engine=selected_engine,
+                        conversation_pause_duration=pause_duration,
+                        speaker_transition_pause=transition_pause,
+                        effects_settings=None,
+                        audio_format=audio_format
+                    )
+                elif selected_engine == "KittenTTS":
+                    # For KittenTTS, use the selected voices
+                    result = generate_conversation_audio_kitten(
+                        script_text,
+                        kitten_voices,
                         selected_engine=selected_engine,
                         conversation_pause_duration=pause_duration,
                         speaker_transition_pause=transition_pause,
@@ -6301,7 +6803,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_audio, speaker_2_audio, speaker_3_audio, 
                     speaker_4_audio, speaker_5_audio,
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
-                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion]
+                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
+                    speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
         )
         
 
@@ -6313,7 +6817,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_audio, speaker_2_audio, speaker_3_audio, 
                     speaker_4_audio, speaker_5_audio,
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
-                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion]
+                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
+                    speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
         )
         
         clear_script_btn.click(
@@ -6322,12 +6828,14 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_audio, speaker_2_audio, speaker_3_audio, 
                     speaker_4_audio, speaker_5_audio,
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
-                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion]
+                    speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
+                    speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
         )
         
         generate_conversation_btn.click(
-            fn=lambda script, pause, trans_pause, audio_fmt, s1, s2, s3, s4, s5, kv1, kv2, kv3, kv4, kv5, engine: handle_generate_conversation_advanced(
-                script, pause, trans_pause, audio_fmt, [s1, s2, s3, s4, s5], [kv1, kv2, kv3, kv4, kv5], engine
+            fn=lambda script, pause, trans_pause, audio_fmt, s1, s2, s3, s4, s5, kv1, kv2, kv3, kv4, kv5, ktv1, ktv2, ktv3, ktv4, ktv5, engine: handle_generate_conversation_advanced(
+                script, pause, trans_pause, audio_fmt, [s1, s2, s3, s4, s5], [kv1, kv2, kv3, kv4, kv5], [ktv1, ktv2, ktv3, ktv4, ktv5], engine
             ),
             inputs=[
                 conversation_script, 
@@ -6338,6 +6846,8 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 speaker_4_audio, speaker_5_audio,
                 speaker_1_kokoro_voice, speaker_2_kokoro_voice, speaker_3_kokoro_voice,
                 speaker_4_kokoro_voice, speaker_5_kokoro_voice,
+                speaker_1_kitten_voice, speaker_2_kitten_voice, speaker_3_kitten_voice,
+                speaker_4_kitten_voice, speaker_5_kitten_voice,
                 tts_engine  # Use the main TTS engine selector
             ],
             outputs=[audio_output, conversation_info]  # Use same audio output as single voice mode
@@ -6351,7 +6861,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 "Kokoro TTS": "kokoro_tab",
                 "Fish Speech": "fish_tab",
                 "IndexTTS": "indextts_tab",
-                "F5-TTS": "f5_tab"
+                "F5-TTS": "f5_tab",
+                "Higgs Audio": "higgs_tab",
+                "KittenTTS": "kitten_tab"
             }
             
             if selected_engine in tab_mapping:
@@ -6412,6 +6924,8 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
                 higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
                 higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                # KittenTTS parameters
+                kitten_voice_param,
                 gain, eq_en, eq_b, eq_m, eq_t,
                 rev_en, rev_room, rev_damp, rev_wet,
                 echo_en, echo_del, echo_dec,
@@ -6436,6 +6950,8 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
                     higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
                     higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                    # KittenTTS parameters
+                    kitten_voice_param,
                     gain, eq_en, eq_b, eq_m, eq_t,
                     rev_en, rev_room, rev_damp, rev_wet,
                     echo_en, echo_del, echo_dec,
@@ -6497,6 +7013,8 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
                     higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
                     higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                    # KittenTTS parameters
+                    kitten_voice,
                     # Effects parameters
                     gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                     enable_reverb, reverb_room, reverb_damping, reverb_wet,

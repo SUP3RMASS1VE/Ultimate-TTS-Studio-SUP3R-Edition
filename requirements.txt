@@ -1,5 +1,6 @@
 accelerate
 cachetools
+onnxruntime-gpu
 conformer==0.3.2
 datasets==2.18.0
 descript-audio-codec
@@ -48,6 +49,7 @@ uvicorn>=0.30.0
 wandb>=0.15.11
 wheel
 kokoro
+hf_xet
 
 # eBook to Audiobook conversion dependencies
 ebooklib>=0.18
@@ -75,10 +77,15 @@ tn
 PyYAML
 deepspeed==0.16.5
 
-#f5
+# f5
 f5-tts
 
-#Higgs
+# KittenTTS
+num2words
+spacy
+https://github.com/KittenML/KittenTTS/releases/download/0.1/kittentts-0.1.0-py3-none-any.whl
+
+# Higgs
 dacite
 boto3==1.35.36
 s3fs
