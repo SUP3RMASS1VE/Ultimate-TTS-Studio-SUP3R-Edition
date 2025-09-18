@@ -31,6 +31,10 @@ If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing
 
 ## ⚠️ Notice: Major App Update
 
+### 📅 Sept 18, 2025
+This update brings **VibeVoice** and **IndexTTS2** as newly supported TTS engines, expanding the variety and flexibility of voice options available.
+<img width="360" height="165" alt="Screenshot 2025-09-18 164743" src="https://github.com/user-attachments/assets/49a6ea70-3028-496b-aec2-01c303f6a777" /><img width="794" height="73" alt="Screenshot 2025-09-18 164736" src="https://github.com/user-attachments/assets/22cacc1b-7dc9-4fa4-913c-4196096fe3d7" />
+
 
 ### 📅 Sept 13, 2025
 This update brings KittenTTS
