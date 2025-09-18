@@ -31,6 +31,11 @@ If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing
 
 ## ⚠️ Notice: Major App Update
 
+
+### 📅 Sept 13, 2025
+This update brings KittenTTS
+<img width="1758" height="377" alt="Screenshot 2025-09-13 231901" src="https://github.com/user-attachments/assets/5a701acf-5639-46dd-9323-b04402e31e2e" />
+
 ### 📅 July 29, 2025
 
 This recent update brings Higgs-Audio TTS:
