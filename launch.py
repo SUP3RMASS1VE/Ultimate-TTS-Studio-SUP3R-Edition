@@ -166,6 +166,20 @@ except ImportError:
     KITTEN_TTS_AVAILABLE = False
     print("⚠️ KittenTTS not available. Some features will be disabled.")
 
+# VibeVoice imports
+try:
+    with suppress_specific_warnings():
+        from vibevoice_handler import (
+            get_vibevoice_handler, generate_vibevoice_podcast, init_vibevoice, 
+            unload_vibevoice, get_vibevoice_status, get_vibevoice_voices, scan_vibevoice_models,
+            download_vibevoice_model
+        )
+    VIBEVOICE_AVAILABLE = True
+    print("✅ VibeVoice handler loaded")
+except ImportError:
+    VIBEVOICE_AVAILABLE = False
+    print("⚠️ VibeVoice not available. Some features will be disabled.")
+
 # ===== HIGGS AUDIO MODEL MANAGEMENT =====
 def init_higgs_audio():
     """Initialize Higgs Audio model"""
@@ -236,6 +250,78 @@ def unload_kitten_tts_model():
         return message
     except Exception as e:
         return f"⚠️ Error unloading KittenTTS: {str(e)}"
+
+# ===== VIBEVOICE MODEL MANAGEMENT =====
+def init_vibevoice_model(model_path: str = "models/VibeVoice-1.5B"):
+    """Initialize VibeVoice model"""
+    if not VIBEVOICE_AVAILABLE:
+        return False, "❌ VibeVoice not available"
+    
+    try:
+        MODEL_STATUS['vibevoice'] = {'loading': True}
+        success, message = init_vibevoice(model_path)
+        if success:
+            MODEL_STATUS['vibevoice'] = {'loaded': True, 'loading': False}
+            return True, "✅ VibeVoice model loaded successfully"
+        else:
+            MODEL_STATUS['vibevoice']['loading'] = False
+            return False, message
+    except Exception as e:
+        MODEL_STATUS['vibevoice']['loading'] = False
+        return False, f"❌ Error loading VibeVoice: {str(e)}"
+
+def unload_vibevoice_model():
+    """Unload VibeVoice model"""
+    try:
+        message = unload_vibevoice()
+        MODEL_STATUS['vibevoice'] = {'loaded': False, 'loading': False}
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return message
+    except Exception as e:
+        return f"⚠️ Error unloading VibeVoice: {str(e)}"
+
+# ===== INDEXTTS2 MODEL MANAGEMENT =====
+def init_indextts2_model():
+    """Initialize IndexTTS2 model"""
+    if not INDEXTTS2_AVAILABLE:
+        return False, "❌ IndexTTS2 not available"
+    
+    try:
+        MODEL_STATUS['indextts2'] = {'loading': True}
+        success, message = init_indextts2()
+        if success:
+            MODEL_STATUS['indextts2'] = {'loaded': True, 'loading': False}
+            return True, "✅ IndexTTS2 model loaded successfully"
+        else:
+            MODEL_STATUS['indextts2']['loading'] = False
+            return False, message
+    except Exception as e:
+        MODEL_STATUS['indextts2']['loading'] = False
+        return False, f"❌ Error loading IndexTTS2: {str(e)}"
+
+def unload_indextts2_model():
+    """Unload IndexTTS2 model"""
+    try:
+        message = unload_indextts2()
+        MODEL_STATUS['indextts2'] = {'loaded': False, 'loading': False}
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return message
+    except Exception as e:
+        return f"⚠️ Error unloading IndexTTS2: {str(e)}"
 
 # eBook Converter imports
 try:
@@ -360,6 +446,20 @@ try:
 except ImportError:
     INDEXTTS_AVAILABLE = False
     print("⚠️  IndexTTS not available - indextts package not found")
+
+# IndexTTS2 imports
+try:
+    with suppress_specific_warnings():
+        from indextts2_handler import (
+            get_indextts2_handler, generate_indextts2_tts, init_indextts2, 
+            unload_indextts2, get_indextts2_status, check_indextts2_models,
+            download_indextts2_models, EMOTION_PRESETS
+        )
+    INDEXTTS2_AVAILABLE = True
+    print("✅ IndexTTS2 handler loaded")
+except ImportError:
+    INDEXTTS2_AVAILABLE = False
+    print("⚠️ IndexTTS2 not available. Some features will be disabled.")
 
 # ===== CONVERSATION MODE FUNCTIONS =====
 def parse_conversation_script(script_text):
@@ -537,6 +637,27 @@ def generate_conversation_audio_simple(
                         ref_audio,
                         0.8,  # temperature
                         None, # seed
+                        effects_settings,
+                        audio_format,
+                        skip_file_saving=True
+                    )
+                elif selected_engine == 'IndexTTS2':
+                    print(f"🎯 Using IndexTTS2 for {speaker}")
+                    result = generate_indextts2_tts(
+                        text,
+                        ref_audio,
+                        "audio_reference",  # emotion_mode
+                        None,  # emotion_audio
+                        None,  # emotion_vectors
+                        "",    # emotion_description
+                        0.8,   # temperature
+                        0.9,   # top_p
+                        50,    # top_k
+                        1.1,   # repetition_penalty
+                        1500,  # max_mel_tokens
+                        None,  # seed
+                        True,  # use_random
+                        1.0,   # emo_alpha
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
@@ -1164,6 +1285,192 @@ def generate_conversation_audio_kitten(
         traceback.print_exc()
         return None, f"❌ KittenTTS conversation error: {str(e)}"
 
+def generate_conversation_audio_indextts2(
+    conversation_script,
+    voice_samples,  # List of voice sample files for each speaker
+    emotion_modes,  # List of emotion modes for each speaker
+    emotion_audios,  # List of emotion audio files for each speaker
+    emotion_descriptions,  # List of emotion descriptions for each speaker
+    emotion_vectors,  # List of emotion vector dicts for each speaker
+    selected_engine="IndexTTS2",
+    conversation_pause_duration=0.8,
+    speaker_transition_pause=0.3,
+    effects_settings=None,
+    audio_format="wav"
+):
+    """Generate a complete conversation with IndexTTS2 using emotion controls for each speaker."""
+    try:
+        print("🎯 Starting IndexTTS2 conversation generation...")
+        
+        # Parse the conversation script
+        conversation, parse_error = parse_conversation_script(conversation_script)
+        if parse_error:
+            return None, f"❌ Script parsing error: {parse_error}"
+        
+        if not conversation:
+            return None, "❌ No valid conversation found in script"
+        
+        print(f"📝 Parsed {len(conversation)} conversation lines")
+        
+        # Get unique speakers and map them to voice samples and emotion settings
+        speakers = get_speaker_names_from_script(conversation_script)
+        print(f"🎤 Found speakers: {speakers}")
+        
+        # Map speakers to voice samples and emotion settings
+        speaker_voice_map = {}
+        speaker_emotion_map = {}
+        
+        for i, speaker in enumerate(speakers):
+            # Voice sample mapping
+            if i < len(voice_samples) and voice_samples[i] is not None:
+                speaker_voice_map[speaker] = voice_samples[i]
+                print(f"🎤 {speaker} -> {voice_samples[i]}")
+            else:
+                speaker_voice_map[speaker] = None
+                print(f"🎤 {speaker} -> No voice sample")
+            
+            # Emotion settings mapping
+            emotion_settings = {
+                'mode': emotion_modes[i] if i < len(emotion_modes) else 'audio_reference',
+                'audio': emotion_audios[i] if i < len(emotion_audios) else None,
+                'description': emotion_descriptions[i] if i < len(emotion_descriptions) else '',
+                'vectors': emotion_vectors[i] if i < len(emotion_vectors) else {}
+            }
+            speaker_emotion_map[speaker] = emotion_settings
+            print(f"🎭 {speaker} emotion mode: {emotion_settings['mode']}")
+        
+        conversation_audio_chunks = []
+        conversation_info = []
+        sample_rate = None
+        
+        # Generate audio for each conversation line
+        for i, line in enumerate(conversation):
+            speaker = line['speaker']
+            text = line['text']
+            
+            print(f"🎯 Generating line {i+1}/{len(conversation)}: {speaker} - \"{text[:30]}...\"")
+            
+            ref_audio = speaker_voice_map.get(speaker)
+            emotion_settings = speaker_emotion_map.get(speaker, {})
+            
+            if not ref_audio:
+                print(f"⚠️ No voice sample for {speaker}, skipping line")
+                continue
+            
+            # Generate audio using IndexTTS2 with emotion controls
+            try:
+                result = generate_indextts2_tts(
+                    text,
+                    ref_audio,
+                    emotion_settings.get('mode', 'audio_reference'),
+                    emotion_settings.get('audio'),
+                    emotion_settings.get('vectors'),
+                    emotion_settings.get('description', ''),
+                    0.8,   # temperature
+                    0.9,   # top_p
+                    50,    # top_k
+                    1.1,   # repetition_penalty
+                    1500,  # max_mel_tokens
+                    None,  # seed
+                    True,  # use_random
+                    1.0,   # emo_alpha
+                    effects_settings,
+                    audio_format,
+                    skip_file_saving=True
+                )
+                
+                if result[0] is None:
+                    print(f"❌ Failed to generate audio for {speaker}: {result[1]}")
+                    continue
+                
+                # Extract audio data
+                if isinstance(result[0], tuple):
+                    current_sample_rate, audio_data = result[0]
+                else:
+                    current_sample_rate = 22050  # Default IndexTTS2 sample rate
+                    audio_data = result[0]
+                
+                if sample_rate is None:
+                    sample_rate = current_sample_rate
+                elif sample_rate != current_sample_rate:
+                    # Resample if needed
+                    import librosa
+                    audio_data = librosa.resample(audio_data, orig_sr=current_sample_rate, target_sr=sample_rate)
+                
+                conversation_audio_chunks.append(audio_data)
+                conversation_info.append({
+                    'speaker': speaker,
+                    'text': text,
+                    'duration': len(audio_data) / sample_rate,
+                    'emotion_mode': emotion_settings.get('mode', 'audio_reference')
+                })
+                
+                print(f"✅ Generated {len(audio_data)} samples for {speaker}")
+                
+            except Exception as e:
+                print(f"❌ Error generating audio for {speaker}: {e}")
+                continue
+        
+        if not conversation_audio_chunks:
+            return None, "❌ No audio generated for any speakers"
+        
+        # Combine all audio chunks with appropriate pauses
+        print("🔗 Combining audio chunks...")
+        final_conversation_audio = []
+        
+        for i, audio_chunk in enumerate(conversation_audio_chunks):
+            # Add the current audio chunk
+            final_conversation_audio.extend(audio_chunk)
+            
+            # Add pause after each line (except the last one)
+            if i < len(conversation_audio_chunks) - 1:
+                current_speaker = conversation_info[i]['speaker']
+                next_speaker = conversation_info[i + 1]['speaker']
+                
+                # Different pause duration based on speaker change
+                if current_speaker != next_speaker:
+                    pause_duration = conversation_pause_duration
+                else:
+                    pause_duration = speaker_transition_pause
+                
+                # Handle negative pause (overlap)
+                if pause_duration < 0:
+                    # Overlap: remove samples from the end of current chunk
+                    overlap_samples = int(abs(pause_duration) * sample_rate)
+                    if overlap_samples < len(final_conversation_audio):
+                        final_conversation_audio = final_conversation_audio[:-overlap_samples]
+                else:
+                    # Add silence
+                    pause_samples = int(pause_duration * sample_rate)
+                    silence = np.zeros(pause_samples)
+                    final_conversation_audio.extend(silence)
+        
+        # Convert to numpy array
+        final_conversation_audio = np.array(final_conversation_audio, dtype=np.float32)
+        
+        # Create conversation summary
+        total_duration = len(final_conversation_audio) / sample_rate
+        unique_speakers = len(set([info['speaker'] for info in conversation_info]))
+        
+        summary = {
+            'total_lines': len(conversation),
+            'unique_speakers': unique_speakers,
+            'total_duration': total_duration,
+            'speakers': list(set([info['speaker'] for info in conversation_info])),
+            'conversation_info': conversation_info,
+            'engine_used': selected_engine,
+            'emotion_controls_used': True
+        }
+        
+        print(f"✅ IndexTTS2 conversation generated: {len(conversation)} lines, {unique_speakers} speakers, {total_duration:.1f}s")
+        
+        return (sample_rate, final_conversation_audio), summary
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, f"❌ IndexTTS2 conversation error: {str(e)}"
+
 def generate_fish_speech_simple(text, ref_audio=None, effects_settings=None, audio_format="wav"):
     """Simplified Fish Speech generation for conversation mode."""
     if not FISH_SPEECH_AVAILABLE:
@@ -1389,8 +1696,10 @@ loaded_voices = {}
 MODEL_STATUS = {
     'chatterbox': {'loaded': False, 'loading': False},
     'kokoro': {'loaded': False, 'loading': False},
+    'vibevoice': {'loaded': False, 'loading': False},
     'fish_speech': {'loaded': False, 'loading': False},
     'indextts': {'loaded': False, 'loading': False},
+    'indextts2': {'loaded': False, 'loading': False},
     'f5_tts': {'loaded': False, 'loading': False, 'models': {}},
     'higgs_audio': {'loaded': False, 'loading': False},
     'kitten_tts': {'loaded': False, 'loading': False}
@@ -3086,6 +3395,116 @@ def generate_indextts_tts(
         print(error_msg)
         return None, error_msg
 
+# ===== INDEXTTS2 FUNCTIONS =====
+def generate_indextts2_unified_tts(
+    text_input: str,
+    indextts2_ref_audio: str = None,
+    indextts2_emotion_mode: str = "audio_reference",
+    indextts2_emotion_audio: str = None,
+    indextts2_emotion_description: str = "",
+    indextts2_emo_alpha: float = 1.0,
+    indextts2_happy: float = 0.0,
+    indextts2_angry: float = 0.0,
+    indextts2_sad: float = 0.0,
+    indextts2_afraid: float = 0.0,
+    indextts2_disgusted: float = 0.0,
+    indextts2_melancholic: float = 0.0,
+    indextts2_surprised: float = 0.0,
+    indextts2_calm: float = 1.0,
+    indextts2_temperature: float = 0.8,
+    indextts2_top_p: float = 0.9,
+    indextts2_top_k: int = 50,
+    indextts2_repetition_penalty: float = 1.1,
+    indextts2_max_mel_tokens: int = 1500,
+    indextts2_seed: int = None,
+    indextts2_use_random: bool = True,
+    effects_settings: dict = None,
+    audio_format: str = "wav",
+    skip_file_saving: bool = False
+):
+    """Generate TTS audio using IndexTTS2 with advanced emotion control."""
+    if not INDEXTTS2_AVAILABLE:
+        return None, "❌ IndexTTS2 not available - check installation"
+    
+    if not MODEL_STATUS['indextts2']['loaded']:
+        return None, "❌ IndexTTS2 model not loaded - please load the model first"
+    
+    if not text_input or not text_input.strip():
+        return None, "❌ Please enter text to synthesize"
+    
+    if not indextts2_ref_audio:
+        return None, "❌ Reference audio is required for IndexTTS2"
+    
+    try:
+        print(f"🎯 Starting IndexTTS2 synthesis...")
+        print(f"   Text: {text_input[:50]}...")
+        print(f"   Emotion mode: {indextts2_emotion_mode}")
+        
+        # Prepare emotion vectors for vector control mode
+        emotion_vectors = None
+        if indextts2_emotion_mode == "vector_control":
+            emotion_vectors = {
+                'happy': indextts2_happy,
+                'angry': indextts2_angry,
+                'sad': indextts2_sad,
+                'afraid': indextts2_afraid,
+                'disgusted': indextts2_disgusted,
+                'melancholic': indextts2_melancholic,
+                'surprised': indextts2_surprised,
+                'calm': indextts2_calm
+            }
+        
+        # Generate audio using IndexTTS2
+        result = generate_indextts2_tts(
+            text=text_input,
+            reference_audio=indextts2_ref_audio,
+            emotion_mode=indextts2_emotion_mode,
+            emotion_audio=indextts2_emotion_audio,
+            emotion_vectors=emotion_vectors,
+            emotion_description=indextts2_emotion_description,
+            temperature=indextts2_temperature,
+            top_p=indextts2_top_p,
+            top_k=indextts2_top_k,
+            repetition_penalty=indextts2_repetition_penalty,
+            max_mel_tokens=indextts2_max_mel_tokens,
+            seed=indextts2_seed,
+            use_random=indextts2_use_random,
+            emo_alpha=indextts2_emo_alpha,
+            effects_settings=effects_settings,
+            audio_format=audio_format,
+            skip_file_saving=skip_file_saving
+        )
+        
+        if result[0] is None:
+            return None, result[1]
+        
+        audio_output, status_message = result
+        
+        if isinstance(audio_output, str):
+            # File path returned
+            return audio_output, status_message
+        elif isinstance(audio_output, tuple):
+            # (sample_rate, audio_data) tuple returned
+            sample_rate, audio_data = audio_output
+            
+            # Apply effects if specified
+            if effects_settings and not skip_file_saving:
+                try:
+                    audio_data = apply_audio_effects(audio_data, sample_rate, effects_settings)
+                except Exception as e:
+                    print(f"⚠️ Error applying effects: {e}")
+            
+            return (sample_rate, audio_data), status_message
+        else:
+            return None, "❌ Unexpected audio format returned"
+            
+    except Exception as e:
+        error_msg = f"❌ IndexTTS2 generation failed: {str(e)}"
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
+        return None, error_msg
+
 # ===== F5-TTS FUNCTIONS =====
 def generate_f5_tts(
     text_input: str,
@@ -3248,6 +3667,27 @@ def convert_ebook_to_audiobook(
     indextts_ref_audio: str = None,
     indextts_temperature: float = 0.8,
     indextts_seed: int = None,
+    # IndexTTS2 parameters
+    indextts2_ref_audio: str = None,
+    indextts2_emotion_mode: str = "audio_reference",
+    indextts2_emotion_audio: str = None,
+    indextts2_emotion_description: str = "",
+    indextts2_emo_alpha: float = 1.0,
+    indextts2_happy: float = 0.0,
+    indextts2_angry: float = 0.0,
+    indextts2_sad: float = 0.0,
+    indextts2_afraid: float = 0.0,
+    indextts2_disgusted: float = 0.0,
+    indextts2_melancholic: float = 0.0,
+    indextts2_surprised: float = 0.0,
+    indextts2_calm: float = 1.0,
+    indextts2_temperature: float = 0.8,
+    indextts2_top_p: float = 0.9,
+    indextts2_top_k: int = 50,
+    indextts2_repetition_penalty: float = 1.1,
+    indextts2_max_mel_tokens: int = 1500,
+    indextts2_seed: int = None,
+    indextts2_use_random: bool = True,
     # F5-TTS parameters
     f5_ref_audio: str = None,
     f5_ref_text: str = None,
@@ -3381,6 +3821,15 @@ def convert_ebook_to_audiobook(
                     higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
                     higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                     effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
+                )
+            elif tts_engine == "IndexTTS2":
+                audio_result, status = generate_indextts2_unified_tts(
+                    chunk['content'], indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio,
+                    indextts2_emotion_description, indextts2_emo_alpha, indextts2_happy, indextts2_angry,
+                    indextts2_sad, indextts2_afraid, indextts2_disgusted, indextts2_melancholic,
+                    indextts2_surprised, indextts2_calm, indextts2_temperature, indextts2_top_p,
+                    indextts2_top_k, indextts2_repetition_penalty, indextts2_max_mel_tokens,
+                    indextts2_seed, indextts2_use_random, effects_settings, "wav", skip_file_saving=True
                 )
             elif tts_engine == "KittenTTS":
                 # Use selected voice for eBook conversion
@@ -3582,6 +4031,27 @@ def generate_unified_tts(
     indextts_ref_audio: str = None,
     indextts_temperature: float = 0.8,
     indextts_seed: int = None,
+    # IndexTTS2 parameters
+    indextts2_ref_audio: str = None,
+    indextts2_emotion_mode: str = "audio_reference",
+    indextts2_emotion_audio: str = None,
+    indextts2_emotion_description: str = "",
+    indextts2_emo_alpha: float = 1.0,
+    indextts2_happy: float = 0.0,
+    indextts2_angry: float = 0.0,
+    indextts2_sad: float = 0.0,
+    indextts2_afraid: float = 0.0,
+    indextts2_disgusted: float = 0.0,
+    indextts2_melancholic: float = 0.0,
+    indextts2_surprised: float = 0.0,
+    indextts2_calm: float = 1.0,
+    indextts2_temperature: float = 0.8,
+    indextts2_top_p: float = 0.9,
+    indextts2_top_k: int = 50,
+    indextts2_repetition_penalty: float = 1.1,
+    indextts2_max_mel_tokens: int = 1500,
+    indextts2_seed: int = None,
+    indextts2_use_random: bool = True,
     # F5-TTS parameters
     f5_ref_audio: str = None,
     f5_ref_text: str = None,
@@ -3660,6 +4130,15 @@ def generate_unified_tts(
         return generate_indextts_tts(
             text_input, indextts_ref_audio, indextts_temperature, indextts_seed,
             effects_settings, audio_format
+        )
+    elif tts_engine == "IndexTTS2":
+        return generate_indextts2_unified_tts(
+            text_input, indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio,
+            indextts2_emotion_description, indextts2_emo_alpha, indextts2_happy, indextts2_angry,
+            indextts2_sad, indextts2_afraid, indextts2_disgusted, indextts2_melancholic,
+            indextts2_surprised, indextts2_calm, indextts2_temperature, indextts2_top_p,
+            indextts2_top_k, indextts2_repetition_penalty, indextts2_max_mel_tokens,
+            indextts2_seed, indextts2_use_random, effects_settings, audio_format
         )
     elif tts_engine == "F5-TTS":
         return generate_f5_tts(
@@ -3895,6 +4374,7 @@ def create_gradio_interface():
             mask-composite: exclude;
             opacity: 0;
             transition: opacity 0.3s ease;
+            pointer-events: none; /* ensure overlay doesn't block clicks */
         }
         
         .card:hover::before, .settings-card:hover::before, .gr-group:hover::before {
@@ -4947,6 +5427,36 @@ def create_gradio_interface():
                             scale=1
                         )
                 
+                # IndexTTS2 Management - Compact
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("🎯 **IndexTTS2**", elem_classes=["fade-in"])
+                        indextts2_status = gr.Markdown(
+                            value="⭕ Not loaded" if INDEXTTS2_AVAILABLE else "❌ Not available",
+                            elem_classes=["fade-in"]
+                        )
+                    with gr.Row():
+                        load_indextts2_btn = gr.Button(
+                            "🔄 Load",
+                            variant="primary",
+                            size="sm",
+                            visible=INDEXTTS2_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                        unload_indextts2_btn = gr.Button(
+                            "🗑️ Unload",
+                            variant="secondary",
+                            size="sm",
+                            visible=INDEXTTS2_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                
+
+            
+            # Second row for Higgs Audio and KittenTTS
+            with gr.Row():
                 # Higgs Audio Management - Compact
                 with gr.Column():
                     with gr.Row():
@@ -4972,9 +5482,7 @@ def create_gradio_interface():
                             elem_classes=["fade-in"],
                             scale=1
                         )
-            
-            # Second row for KittenTTS and System Cleanup
-            with gr.Row():
+                
                 # KittenTTS Management - Compact
                 with gr.Column():
                     with gr.Row():
@@ -5000,7 +5508,9 @@ def create_gradio_interface():
                             elem_classes=["fade-in"],
                             scale=1
                         )
-                
+            
+            # Third row for System Cleanup
+            with gr.Row():
                 # System Cleanup - Compact
                 with gr.Column():
                     with gr.Row():
@@ -5027,7 +5537,7 @@ def create_gradio_interface():
                     with gr.TabItem("📝 TEXT TO SYNTHESIZE", id="single_voice"):
                         # Text input with enhanced styling
                         text = gr.Textbox(
-                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS, Higgs audio TTS and F5 TTS for custom voice cloning or Kitten TTS and Kokoro TTS for high-quality pre-trained voices.",
+                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS and Index TTS 2, Higgs audio TTS and F5 TTS for custom voice cloning or Kitten TTS and Kokoro TTS for high-quality pre-trained voices and VibeVoice for podcast.",
                             label="📝 Text to synthesize",
                             lines=5,
                             placeholder="Enter your text here...",
@@ -5294,6 +5804,206 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     show_label=False
                                 )
                             
+                            # IndexTTS2 emotion control accordions for each speaker
+                            with gr.Accordion("🎭 Speaker 1 IndexTTS2 Emotions", open=False, visible=False, elem_classes=["fade-in"]) as speaker_1_indextts2_accordion:
+                                with gr.Row():
+                                    speaker_1_emotion_mode = gr.Radio(
+                                        choices=[
+                                            ("🎵 Audio Reference", "audio_reference"),
+                                            ("🎛️ Manual Control", "vector_control"),
+                                            ("📝 Text Description", "text_description")
+                                        ],
+                                        value="audio_reference",
+                                        label="Emotion Control Mode",
+                                        elem_classes=["fade-in"]
+                                    )
+                                speaker_1_emotion_audio = gr.Audio(
+                                    sources=["upload"],
+                                    type="filepath",
+                                    label="🎵 Emotion Reference Audio",
+                                    visible=True,
+                                    elem_classes=["fade-in"]
+                                )
+                                speaker_1_emotion_description = gr.Textbox(
+                                    label="📝 Emotion Description",
+                                    placeholder="e.g., 'happy and excited', 'sad and melancholic', 'angry and frustrated'",
+                                    visible=False,
+                                    elem_classes=["fade-in"]
+                                )
+                                speaker_1_emotion_vectors = gr.Group(visible=False, elem_classes=["fade-in"])
+                                with speaker_1_emotion_vectors:
+                                    gr.Markdown("**🎛️ Emotion Intensity Controls**")
+                                    with gr.Row():
+                                        speaker_1_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                        speaker_1_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                    with gr.Row():
+                                        speaker_1_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                        speaker_1_afraid = gr.Slider(0, 1, 0, step=0.1, label="😨 Afraid")
+                                    with gr.Row():
+                                        speaker_1_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                        speaker_1_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                            
+                            with gr.Accordion("🎭 Speaker 2 IndexTTS2 Emotions", open=False, visible=False, elem_classes=["fade-in"]) as speaker_2_indextts2_accordion:
+                                with gr.Row():
+                                    speaker_2_emotion_mode = gr.Radio(
+                                        choices=[
+                                            ("🎵 Audio Reference", "audio_reference"),
+                                            ("🎛️ Manual Control", "vector_control"),
+                                            ("📝 Text Description", "text_description")
+                                        ],
+                                        value="audio_reference",
+                                        label="Emotion Control Mode",
+                                        elem_classes=["fade-in"]
+                                    )
+                                speaker_2_emotion_audio = gr.Audio(
+                                    sources=["upload"],
+                                    type="filepath",
+                                    label="🎵 Emotion Reference Audio",
+                                    visible=True,
+                                    elem_classes=["fade-in"]
+                                )
+                                speaker_2_emotion_description = gr.Textbox(
+                                    label="📝 Emotion Description",
+                                    placeholder="e.g., 'happy and excited', 'sad and melancholic', 'angry and frustrated'",
+                                    visible=False,
+                                    elem_classes=["fade-in"]
+                                )
+                                speaker_2_emotion_vectors = gr.Group(visible=False, elem_classes=["fade-in"])
+                                with speaker_2_emotion_vectors:
+                                    gr.Markdown("**🎛️ Emotion Intensity Controls**")
+                                    with gr.Row():
+                                        speaker_2_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                        speaker_2_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                    with gr.Row():
+                                        speaker_2_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                        speaker_2_afraid = gr.Slider(0, 1, 0, step=0.1, label="�28 Afraid")
+                                    with gr.Row():
+                                        speaker_2_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                        speaker_2_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                            
+                            with gr.Accordion("🎭 Speaker 3 IndexTTS2 Emotions", open=False, visible=False, elem_classes=["fade-in"]) as speaker_3_indextts2_accordion:
+                                with gr.Row():
+                                    speaker_3_emotion_mode = gr.Radio(
+                                        choices=[
+                                            ("🎵 Audio Reference", "audio_reference"),
+                                            ("🎛️ Manual Control", "vector_control"),
+                                            ("📝 Text Description", "text_description")
+                                        ],
+                                        value="audio_reference",
+                                        label="Emotion Control Mode",
+                                        elem_classes=["fade-in"]
+                                    )
+                                with gr.Row():
+                                    with gr.Column():
+                                        speaker_3_emotion_audio = gr.Audio(
+                                            sources=["upload"],
+                                            type="filepath",
+                                            label="🎵 Emotion Reference Audio",
+                                            visible=True,
+                                            elem_classes=["fade-in"]
+                                        )
+                                        speaker_3_emotion_description = gr.Textbox(
+                                            label="📝 Emotion Description",
+                                            placeholder="e.g., 'happy and excited', 'sad and melancholic', 'angry and frustrated'",
+                                            visible=False,
+                                            elem_classes=["fade-in"]
+                                        )
+                                    with gr.Column():
+                                        speaker_3_emotion_vectors = gr.Group(visible=False, elem_classes=["fade-in"])
+                                        with speaker_3_emotion_vectors:
+                                            gr.Markdown("**🎛️ Emotion Intensity Controls**")
+                                            with gr.Row():
+                                                speaker_3_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                                speaker_3_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                            with gr.Row():
+                                                speaker_3_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                                speaker_3_afraid = gr.Slider(0, 1, 0, step=0.1, label="😨 Afraid")
+                                            with gr.Row():
+                                                speaker_3_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                                speaker_3_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                            
+                            with gr.Accordion("🎭 Speaker 4 IndexTTS2 Emotions", open=False, visible=False, elem_classes=["fade-in"]) as speaker_4_indextts2_accordion:
+                                with gr.Row():
+                                    speaker_4_emotion_mode = gr.Radio(
+                                        choices=[
+                                            ("🎵 Audio Reference", "audio_reference"),
+                                            ("🎛️ Manual Control", "vector_control"),
+                                            ("📝 Text Description", "text_description")
+                                        ],
+                                        value="audio_reference",
+                                        label="Emotion Control Mode",
+                                        elem_classes=["fade-in"]
+                                    )
+                                with gr.Row():
+                                    with gr.Column():
+                                        speaker_4_emotion_audio = gr.Audio(
+                                            sources=["upload"],
+                                            type="filepath",
+                                            label="🎵 Emotion Reference Audio",
+                                            visible=True,
+                                            elem_classes=["fade-in"]
+                                        )
+                                        speaker_4_emotion_description = gr.Textbox(
+                                            label="📝 Emotion Description",
+                                            placeholder="e.g., 'happy and excited', 'sad and melancholic', 'angry and frustrated'",
+                                            visible=False,
+                                            elem_classes=["fade-in"]
+                                        )
+                                    with gr.Column():
+                                        speaker_4_emotion_vectors = gr.Group(visible=False, elem_classes=["fade-in"])
+                                        with speaker_4_emotion_vectors:
+                                            gr.Markdown("**🎛️ Emotion Intensity Controls**")
+                                            with gr.Row():
+                                                speaker_4_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                                speaker_4_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                            with gr.Row():
+                                                speaker_4_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                                speaker_4_afraid = gr.Slider(0, 1, 0, step=0.1, label="😨 Afraid")
+                                            with gr.Row():
+                                                speaker_4_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                                speaker_4_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                            
+                            with gr.Accordion("🎭 Speaker 5 IndexTTS2 Emotions", open=False, visible=False, elem_classes=["fade-in"]) as speaker_5_indextts2_accordion:
+                                with gr.Row():
+                                    speaker_5_emotion_mode = gr.Radio(
+                                        choices=[
+                                            ("🎵 Audio Reference", "audio_reference"),
+                                            ("🎛️ Manual Control", "vector_control"),
+                                            ("📝 Text Description", "text_description")
+                                        ],
+                                        value="audio_reference",
+                                        label="Emotion Control Mode",
+                                        elem_classes=["fade-in"]
+                                    )
+                                with gr.Row():
+                                    with gr.Column():
+                                        speaker_5_emotion_audio = gr.Audio(
+                                            sources=["upload"],
+                                            type="filepath",
+                                            label="🎵 Emotion Reference Audio",
+                                            visible=True,
+                                            elem_classes=["fade-in"]
+                                        )
+                                        speaker_5_emotion_description = gr.Textbox(
+                                            label="📝 Emotion Description",
+                                            placeholder="e.g., 'happy and excited', 'sad and melancholic', 'angry and frustrated'",
+                                            visible=False,
+                                            elem_classes=["fade-in"]
+                                        )
+                                    with gr.Column():
+                                        speaker_5_emotion_vectors = gr.Group(visible=False, elem_classes=["fade-in"])
+                                        with speaker_5_emotion_vectors:
+                                            gr.Markdown("**🎛️ Emotion Intensity Controls**")
+                                            with gr.Row():
+                                                speaker_5_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                                speaker_5_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                            with gr.Row():
+                                                speaker_5_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                                speaker_5_afraid = gr.Slider(0, 1, 0, step=0.1, label="😨 Afraid")
+                                            with gr.Row():
+                                                speaker_5_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                                speaker_5_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                            
                             # Help text for voice samples
                             gr.Markdown("""
                             <div style='margin-top: 10px; padding: 10px; background: rgba(102, 126, 234, 0.05); border-radius: 8px; border-left: 3px solid #667eea;'>
@@ -5303,6 +6013,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     • <strong>ChatterboxTTS:</strong> Voice samples required for voice cloning ✅<br/>
                                     • <strong>Fish Speech:</strong> Voice samples help with voice matching ✅<br/>
                                     • <strong>IndexTTS:</strong> Voice samples required for voice cloning ✅<br/>
+                                    • <strong>IndexTTS2:</strong> Voice samples + emotion controls for advanced expression ✅<br/>
                                     • <strong>Kokoro TTS:</strong> ✅ Uses pre-trained voices (no samples needed - voices auto-assigned)<br/>
                                     • Voice samples will be automatically assigned when you analyze the script
                                 </p>
@@ -5375,6 +6086,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                             ("🗣️ Kokoro TTS", "Kokoro TTS"),
                                             ("🐟 Fish Speech", "Fish Speech"),
                                             ("🎯 IndexTTS", "IndexTTS"),
+                                            ("🎯 IndexTTS2", "IndexTTS2"),
                                             ("🎵 F5-TTS", "F5-TTS"),
                                             ("🎙️ Higgs Audio", "Higgs Audio"),
                                             ("🐱 KittenTTS", "KittenTTS")
@@ -5469,6 +6181,247 @@ Alice: I went to Japan. It was absolutely incredible!""",
                             ebook_chunk_gap = gr.Slider(visible=False, value=1.0)
                             ebook_chapter_gap = gr.Slider(visible=False, value=2.0)
 
+                    # VibeVoice Tab
+                    with gr.TabItem("🎙️ VIBEVOICE", id="vibevoice_mode"):
+                        if VIBEVOICE_AVAILABLE:
+                            gr.Markdown("""
+                            <div style='background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1)); 
+                                        padding: 15px; border-radius: 12px; margin-bottom: 15px;'>
+                                <h3 style='margin: 0 0 8px 0; padding: 0; font-size: 1.1em;'>🎙️ VibeVoice Podcast Generation</h3>
+                                <p style='margin: 0; opacity: 0.8; font-size: 0.9em;'>
+                                    Generate high-quality multi-speaker podcasts and conversations using VibeVoice's advanced TTS technology.
+                                    Upload voice samples and create natural-sounding dialogues.
+                                </p>
+                            </div>
+                            """)
+                            
+                            with gr.Row():
+                                with gr.Column(scale=2):
+                                    # Script input
+                                    vibevoice_script = gr.Textbox(
+                                        label="📝 Podcast Script",
+                                        placeholder="Enter your podcast script here. Each line will be assigned to speakers in rotation.\n\nExample:\nWelcome to our podcast today!\nThanks for having me, it's great to be here.\nLet's dive into our topic...",
+                                        lines=8,
+                                        elem_classes=["fade-in"]
+                                    )
+                                    
+                                    # Number of speakers
+                                    vibevoice_num_speakers = gr.Slider(
+                                        minimum=1,
+                                        maximum=4,
+                                        step=1,
+                                        value=2,
+                                        label="🎤 Number of Speakers",
+                                        elem_classes=["fade-in"]
+                                    )
+                                    
+                                    # Speaker voice selections
+                                    with gr.Group():
+                                        with gr.Row():
+                                            gr.Markdown("**🎭 Speaker Voice Selection**")
+                                            vibevoice_refresh_voices_btn = gr.Button(
+                                                "🔄 Refresh Voices",
+                                                variant="secondary",
+                                                size="sm",
+                                                elem_classes=["fade-in"]
+                                            )
+                                        
+                                        vibevoice_speaker_1 = gr.Radio(
+                                            label="🎤 Speaker 1 Voice",
+                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                            elem_classes=["fade-in"]
+                                        )
+                                        vibevoice_speaker_2 = gr.Radio(
+                                            label="🎤 Speaker 2 Voice",
+                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                            elem_classes=["fade-in"]
+                                        )
+                                        vibevoice_speaker_3 = gr.Radio(
+                                            label="🎤 Speaker 3 Voice",
+                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                            visible=False,
+                                            elem_classes=["fade-in"]
+                                        )
+                                        vibevoice_speaker_4 = gr.Radio(
+                                            label="🎤 Speaker 4 Voice",
+                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                            visible=False,
+                                            elem_classes=["fade-in"]
+                                        )
+                                
+                                with gr.Column(scale=1):
+                                    # VibeVoice settings
+                                    gr.Markdown("**⚙️ VibeVoice Settings**")
+                                    
+                                    vibevoice_cfg_scale = gr.Slider(
+                                        minimum=0.1,
+                                        maximum=3.0,
+                                        step=0.1,
+                                        value=1.3,
+                                        label="🎛️ CFG Scale",
+                                        info="Controls generation quality vs diversity",
+                                        elem_classes=["fade-in"]
+                                    )
+                                    
+                                    vibevoice_seed = gr.Number(
+                                        label="🎲 Seed (optional)",
+                                        value=44,
+                                        precision=0,
+                                        info="Leave empty for random generation",
+                                        elem_classes=["fade-in"]
+                                    )
+                                    
+                                    # Model management
+                                    with gr.Accordion("🤖 Model Management", open=False):
+                                        vibevoice_model_status = gr.Markdown(
+                                            value=get_vibevoice_status() if VIBEVOICE_AVAILABLE else "❌ VibeVoice not available",
+                                            elem_classes=["fade-in"]
+                                        )
+                                        
+                                        # Model download section
+                                        with gr.Group():
+                                            gr.Markdown("**📥 Download Models**")
+                                            vibevoice_model_select = gr.Radio(
+                                                choices=[
+                                                    ("VibeVoice-1.5B (Compact, ~2.7B params)", "VibeVoice-1.5B"),
+                                                    ("VibeVoice-Large (High Quality, ~9.34B params)", "VibeVoice-Large")
+                                                ],
+                                                value="VibeVoice-1.5B",
+                                                label="Select Model to Download",
+                                                elem_classes=["fade-in"]
+                                            )
+                                            
+                                            vibevoice_download_btn = gr.Button(
+                                                "📥 Download Model",
+                                                variant="primary",
+                                                interactive=True,
+                                                elem_classes=["fade-in"]
+                                            )
+                                            
+                                            vibevoice_download_status = gr.Markdown(
+                                                value="",
+                                                elem_classes=["fade-in"]
+                                            )
+                                        
+                                        # Model loading section
+                                        with gr.Group():
+                                            gr.Markdown("**🔄 Load/Unload Models**")
+                                            # Downloaded models selector and refresh
+                                            with gr.Row():
+                                                vibevoice_downloaded_models = gr.Radio(
+                                                    label="📦 Downloaded Models",
+                                                    choices=scan_vibevoice_models() if VIBEVOICE_AVAILABLE else [],
+                                                    elem_classes=["fade-in"],
+                                                    scale=3
+                                                )
+                                                vibevoice_refresh_models_btn = gr.Button(
+                                                    "🔄 Refresh Models",
+                                                    variant="secondary",
+                                                    elem_classes=["fade-in"],
+                                                    scale=1
+                                                )
+                                            vibevoice_model_path = gr.Textbox(
+                                                label="📁 Model Path",
+                                                value="models/VibeVoice-1.5B",
+                                                elem_classes=["fade-in"]
+                                            )
+                                            
+                                            with gr.Row():
+                                                vibevoice_load_btn = gr.Button(
+                                                    "🔄 Load Model",
+                                                    variant="secondary",
+                                                    elem_classes=["fade-in"]
+                                                )
+                                                vibevoice_unload_btn = gr.Button(
+                                                    "🗑️ Unload Model",
+                                                    variant="secondary",
+                                                    elem_classes=["fade-in"]
+                                                )
+                                                gr.Markdown(
+                                                    value=(
+                                                        "**Note:** Unload works only before the first generation. "
+                                                        "After generating once, restart the app to fully unload."
+                                                    ),
+                                                    elem_classes=["fade-in"]
+                                                )
+                                    
+                                    # Custom voice upload
+                                    with gr.Accordion("🎤 Add Custom Voice (3 to 10 seconds)", open=False):
+                                        custom_voice_file = gr.File(
+                                            label="📁 Upload Voice Sample",
+                                            file_types=[".wav", ".mp3", ".flac", ".ogg"],
+                                            elem_classes=["fade-in"]
+                                        )
+                                        vibevoice_custom_voice_name = gr.Textbox(
+                                            label="🏷️ Voice Name",
+                                            placeholder="Enter a name for this voice",
+                                            elem_classes=["fade-in"]
+                                        )
+                                        add_voice_btn = gr.Button(
+                                            "➕ Add Voice",
+                                            variant="secondary",
+                                            elem_classes=["fade-in"]
+                                        )
+                                        add_voice_status = gr.Markdown(
+                                            value="",
+                                            elem_classes=["fade-in"]
+                                        )
+                            
+                            # Generate button
+                            vibevoice_generate_btn = gr.Button(
+                                "🎙️ Generate Podcast",
+                                variant="primary",
+                                size="lg",
+                                elem_classes=["generate-btn", "fade-in"]
+                            )
+                            
+                            # Output
+                            vibevoice_output = gr.Audio(
+                                label="🎧 Generated Podcast",
+                                show_download_button=True,
+                                elem_classes=["fade-in", "glow"]
+                            )
+                            
+                            vibevoice_status = gr.Textbox(
+                                label="📊 Generation Status",
+                                lines=6,
+                                interactive=False,
+                                elem_classes=["fade-in"]
+                            )
+                            
+                        else:
+                            # Placeholder when VibeVoice is not available
+                            gr.Markdown("""
+                            <div style='text-align: center; padding: 40px; opacity: 0.5;'>
+                                <h3>🎙️ VibeVoice Podcast Generator</h3>
+                                <p>⚠️ Not available - please install VibeVoice dependencies</p>
+                            </div>
+                            """)
+                            # Create dummy components
+                            vibevoice_script = gr.Textbox(visible=False)
+                            vibevoice_num_speakers = gr.Slider(visible=False, value=2)
+                            vibevoice_refresh_voices_btn = gr.Button(visible=False)
+                            vibevoice_speaker_1 = gr.Radio(visible=False, choices=[])
+                            vibevoice_speaker_2 = gr.Radio(visible=False, choices=[])
+                            vibevoice_speaker_3 = gr.Radio(visible=False, choices=[])
+                            vibevoice_speaker_4 = gr.Radio(visible=False, choices=[])
+                            vibevoice_cfg_scale = gr.Slider(visible=False, value=1.3)
+                            vibevoice_seed = gr.Number(visible=False)
+                            vibevoice_model_status = gr.Markdown(visible=False)
+                            vibevoice_model_select = gr.Radio(visible=False, choices=[])
+                            vibevoice_download_btn = gr.Button(visible=False)
+                            vibevoice_download_status = gr.Markdown(visible=False)
+                            vibevoice_model_path = gr.Textbox(visible=False)
+                            vibevoice_load_btn = gr.Button(visible=False)
+                            vibevoice_unload_btn = gr.Button(visible=False)
+                            custom_voice_file = gr.File(visible=False)
+                            vibevoice_custom_voice_name = gr.Textbox(visible=False)
+                            add_voice_btn = gr.Button(visible=False)
+                            add_voice_status = gr.Markdown(visible=False)
+                            vibevoice_generate_btn = gr.Button(visible=False)
+                            vibevoice_output = gr.Audio(visible=False)
+                            vibevoice_status = gr.Textbox(visible=False)
+
                 
                 # TTS Engine Selection with custom styling
                 tts_engine = gr.Radio(
@@ -5477,6 +6430,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         ("🗣️ Kokoro TTS - Pre-trained Voices", "Kokoro TTS"),
                         ("🐟 Fish Speech - Natural TTS", "Fish Speech"),
                         ("🎯 IndexTTS - Industrial Quality", "IndexTTS"),
+                        ("🎯 IndexTTS2 - Advanced Emotion Control", "IndexTTS2"),
                         ("🎵 F5-TTS - Flow Matching TTS", "F5-TTS"),
                         ("🎙️ Higgs Audio - Advanced Multimodal TTS", "Higgs Audio"),
                         ("🐱 KittenTTS - Mini Model TTS", "KittenTTS")
@@ -5851,6 +6805,162 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         indextts_temperature = gr.Slider(visible=False, value=0.8)
                         indextts_seed = gr.Number(visible=False, value=None)
             
+            # IndexTTS2 Tab
+            with gr.TabItem("🎯 IndexTTS2", id="indextts2_tab"):
+                if INDEXTTS2_AVAILABLE:
+                    with gr.Group(visible=True, elem_id="indextts2_controls", elem_classes=["fade-in"]):
+                        gr.Markdown("**🎯 IndexTTS2 - Advanced Emotionally Expressive TTS**")
+                        gr.Markdown("*💡 Zero-shot voice cloning with advanced emotion control*", elem_classes=["fade-in"])
+                        
+                        with gr.Row():
+                            indextts2_ref_audio = gr.Audio(
+                                label="🎤 Reference Audio (Required) - Voice to clone (max 15s for optimal performance)",
+                                type="filepath"
+                            )
+                        
+                        # Emotion Control Section
+                        with gr.Accordion("🎭 Emotion Control", open=True, elem_classes=["fade-in"]):
+                            indextts2_emotion_mode = gr.Radio(
+                                choices=[
+                                    ("🎵 Audio Reference", "audio_reference"),
+                                    ("🎛️ Manual Control", "vector_control"),
+                                    ("📝 Text Description", "text_description")
+                                ],
+                                value="audio_reference",
+                                label="🎭 Emotion Control Mode - Choose how to control emotional expression"
+                            )
+                            
+                            # Audio Reference Mode
+                            with gr.Group(visible=True) as indextts2_audio_mode:
+                                indextts2_emotion_audio = gr.Audio(
+                                    label="🎭 Emotion Reference Audio - Audio expressing the desired emotion",
+                                    type="filepath"
+                                )
+                                indextts2_emo_alpha = gr.Slider(
+                                    minimum=0.0,
+                                    maximum=1.0,
+                                    value=1.0,
+                                    step=0.1,
+                                    label="🎚️ Emotion Strength - Blend between speaker voice and emotion reference"
+                                )
+                            
+                            # Vector Control Mode
+                            with gr.Group(visible=False) as indextts2_vector_mode:
+                                gr.Markdown("**🎛️ Manual Emotion Control**")
+                                with gr.Row():
+                                    indextts2_happy = gr.Slider(0, 1, 0, step=0.1, label="😊 Happy")
+                                    indextts2_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
+                                    indextts2_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
+                                    indextts2_afraid = gr.Slider(0, 1, 0, step=0.1, label="😨 Afraid")
+                                with gr.Row():
+                                    indextts2_disgusted = gr.Slider(0, 1, 0, step=0.1, label="🤢 Disgusted")
+                                    indextts2_melancholic = gr.Slider(0, 1, 0, step=0.1, label="😔 Melancholic")
+                                    indextts2_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
+                                    indextts2_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
+                                
+                                # Emotion Presets
+                                with gr.Row():
+                                    indextts2_emotion_preset = gr.Radio(
+                                        choices=list(EMOTION_PRESETS.keys()) if INDEXTTS2_AVAILABLE else [],
+                                        label="🎭 Emotion Presets - Quick emotion settings",
+                                        value=None
+                                    )
+                                    indextts2_apply_preset = gr.Button("Apply Preset", size="sm")
+                            
+                            # Text Description Mode
+                            with gr.Group(visible=False) as indextts2_text_mode:
+                                indextts2_emotion_description = gr.Textbox(
+                                    label="📝 Emotion Description - Describe the desired emotion in natural language",
+                                    placeholder="e.g., 'excited and happy', 'sad and melancholic', 'calm and peaceful'"
+                                )
+                        
+                        with gr.Accordion("🔧 Advanced IndexTTS2 Settings", open=False, elem_classes=["fade-in"]):
+                            gr.Markdown("<p style='opacity: 0.7; margin-bottom: 15px;'>🔧 Fine-tune IndexTTS2 generation parameters</p>")
+                            
+                            with gr.Row():
+                                indextts2_temperature = gr.Slider(
+                                    minimum=0.1,
+                                    maximum=2.0,
+                                    value=0.8,
+                                    step=0.1,
+                                    label="🌡️ Temperature - Controls randomness in generation"
+                                )
+                                indextts2_top_p = gr.Slider(
+                                    minimum=0.1,
+                                    maximum=1.0,
+                                    value=0.9,
+                                    step=0.05,
+                                    label="🎯 Top-p - Nucleus sampling parameter"
+                                )
+                            
+                            with gr.Row():
+                                indextts2_top_k = gr.Slider(
+                                    minimum=1,
+                                    maximum=100,
+                                    value=50,
+                                    step=1,
+                                    label="🔝 Top-k - Top-k sampling parameter"
+                                )
+                                indextts2_repetition_penalty = gr.Slider(
+                                    minimum=1.0,
+                                    maximum=2.0,
+                                    value=1.1,
+                                    step=0.1,
+                                    label="🔄 Repetition Penalty - Penalty for repetitive content"
+                                )
+                            
+                            with gr.Row():
+                                indextts2_max_mel_tokens = gr.Slider(
+                                    minimum=500,
+                                    maximum=3000,
+                                    value=1500,
+                                    step=100,
+                                    label="📏 Max Mel Tokens - Maximum length of generated audio"
+                                )
+                                indextts2_seed = gr.Number(
+                                    label="🎲 Seed - Set seed for reproducible results",
+                                    value=None,
+                                    precision=0
+                                )
+                            
+                            indextts2_use_random = gr.Checkbox(
+                                label="🎲 Random Sampling - Enable random sampling for variation",
+                                value=False
+                            )
+                        
+
+                
+                # Placeholder when IndexTTS2 is not available
+                else:
+                    with gr.Group():
+                        gr.Markdown("<div style='text-align: center; padding: 40px; opacity: 0.5;'>**🎯 IndexTTS2** - ⚠️ Not available - please check installation</div>")
+                        # Create dummy components
+                        indextts2_ref_audio = gr.Audio(visible=False, value=None)
+                        indextts2_emotion_mode = gr.Radio(visible=False, value="audio_reference")
+                        indextts2_emotion_audio = gr.Audio(visible=False, value=None)
+                        indextts2_emotion_description = gr.Textbox(visible=False, value="")
+                        indextts2_emo_alpha = gr.Slider(visible=False, value=1.0)
+                        indextts2_happy = gr.Slider(visible=False, value=0)
+                        indextts2_angry = gr.Slider(visible=False, value=0)
+                        indextts2_sad = gr.Slider(visible=False, value=0)
+                        indextts2_afraid = gr.Slider(visible=False, value=0)
+                        indextts2_disgusted = gr.Slider(visible=False, value=0)
+                        indextts2_melancholic = gr.Slider(visible=False, value=0)
+                        indextts2_surprised = gr.Slider(visible=False, value=0)
+                        indextts2_calm = gr.Slider(visible=False, value=1)
+                        indextts2_emotion_preset = gr.Radio(visible=False, choices=[])
+                        indextts2_apply_preset = gr.Button(visible=False)
+                        indextts2_temperature = gr.Slider(visible=False, value=0.8)
+                        indextts2_top_p = gr.Slider(visible=False, value=0.9)
+                        indextts2_top_k = gr.Slider(visible=False, value=50)
+                        indextts2_repetition_penalty = gr.Slider(visible=False, value=1.1)
+                        indextts2_max_mel_tokens = gr.Slider(visible=False, value=1500)
+                        indextts2_seed = gr.Number(visible=False, value=None)
+                        indextts2_use_random = gr.Checkbox(visible=False, value=True)
+                        indextts2_audio_mode = gr.Group(visible=False)
+                        indextts2_vector_mode = gr.Group(visible=False)
+                        indextts2_text_mode = gr.Group(visible=False)
+            
             # F5-TTS Tab
             with gr.TabItem("🎵 F5-TTS", id="f5_tab"):
                 if F5_TTS_AVAILABLE:
@@ -6032,7 +7142,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         # Voice selection
                         with gr.Row():
                             with gr.Column():
-                                kitten_voice = gr.Dropdown(
+                                kitten_voice = gr.Radio(
                                     label="🗣️ Voice Selection",
                                     choices=KITTEN_VOICES if KITTEN_TTS_AVAILABLE else ["expr-voice-2-f"],
                                     value="expr-voice-2-f",
@@ -6278,6 +7388,124 @@ Alice: I went to Japan. It was absolutely incredible!""",
             simple_message = "✅ All temporary files cleared successfully"
             return simple_message, chatterbox_audio_update, fish_audio_update, *speaker_audio_updates
         
+        # IndexTTS2 management functions
+        def handle_load_indextts2():
+            success, message = init_indextts2_model()
+            if success:
+                indextts2_status_text = "✅ Loaded (Auto-selected)"
+                # Auto-select IndexTTS2 engine when loaded
+                selected_engine = "IndexTTS2"
+                # Auto-switch to IndexTTS2 tab
+                selected_tab = gr.update(selected="indextts2_tab")
+            else:
+                indextts2_status_text = "❌ Failed to load"
+                selected_engine = gr.update()  # No change to current selection
+                selected_tab = gr.update()  # No tab change
+            
+            if EBOOK_CONVERTER_AVAILABLE:
+                return indextts2_status_text, selected_engine, selected_engine, selected_tab
+            else:
+                return indextts2_status_text, selected_engine, selected_tab
+        
+        def handle_unload_indextts2():
+            message = unload_indextts2_model()
+            indextts2_status_text = "⭕ Not loaded"
+            # Don't change engine selection when unloading
+            return indextts2_status_text
+        
+        def _normalize_emotion_mode(mode_input):
+            """Normalize Radio input into one of: audio_reference, vector_control, text_description.
+
+            Radio widgets may emit either the display label or the internal value
+            depending on how choices were configured. This normalizer accepts both.
+            """
+            aliases = {
+                "audio_reference": [
+                    "audio_reference", "AUDIO_REFERENCE", "Audio Reference", "🎵 Audio Reference"
+                ],
+                "vector_control": [
+                    "vector_control", "VECTOR_CONTROL", "Manual Control", "🎛️ Manual Control"
+                ],
+                "text_description": [
+                    "text_description", "TEXT_DESCRIPTION", "Text Description", "📝 Text Description"
+                ],
+            }
+
+            candidates = []
+            if isinstance(mode_input, (list, tuple)):
+                candidates = [str(x) for x in mode_input]
+            else:
+                candidates = [str(mode_input)]
+
+            for candidate in candidates:
+                for canonical, keys in aliases.items():
+                    if candidate in keys:
+                        return canonical
+            # Fallback: return as-is to keep previous behavior
+            return str(mode_input)
+
+        def handle_indextts2_emotion_mode_change(mode):
+            """Handle IndexTTS2 emotion mode changes"""
+            normalized = _normalize_emotion_mode(mode)
+            if normalized == "audio_reference":
+                return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+            elif normalized == "vector_control":
+                return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
+            elif normalized == "text_description":
+                return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True)
+            else:
+                return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+        
+        def handle_conversation_emotion_mode_change(mode):
+            """Handle conversation mode IndexTTS2 emotion mode changes"""
+            normalized = _normalize_emotion_mode(mode)
+            print(f"🎭 Conversation emotion mode changed to: {mode}")
+            if normalized == "audio_reference":
+                print("   → Showing audio reference controls")
+                return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+            elif normalized == "vector_control":
+                print("   → Showing vector control sliders")
+                return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True)
+            elif normalized == "text_description":
+                print("   → Showing text description input")
+                return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
+            else:
+                print("   → Defaulting to audio reference controls")
+                return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
+        
+        # Individual handlers for each speaker to avoid state conflicts
+        def handle_speaker_1_emotion_mode_change(mode):
+            return handle_conversation_emotion_mode_change(mode)
+        
+        def handle_speaker_2_emotion_mode_change(mode):
+            return handle_conversation_emotion_mode_change(mode)
+        
+        def handle_speaker_3_emotion_mode_change(mode):
+            return handle_conversation_emotion_mode_change(mode)
+        
+        def handle_speaker_4_emotion_mode_change(mode):
+            return handle_conversation_emotion_mode_change(mode)
+        
+        def handle_speaker_5_emotion_mode_change(mode):
+            return handle_conversation_emotion_mode_change(mode)
+        
+        def apply_indextts2_emotion_preset(preset_name):
+            """Apply IndexTTS2 emotion preset"""
+            if not INDEXTTS2_AVAILABLE or not preset_name or preset_name not in EMOTION_PRESETS:
+                return [gr.update() for _ in range(8)]  # Return no changes
+            
+            preset = EMOTION_PRESETS[preset_name]
+            return [
+                gr.update(value=preset.get('happy', 0.0)),
+                gr.update(value=preset.get('angry', 0.0)),
+                gr.update(value=preset.get('sad', 0.0)),
+                gr.update(value=preset.get('afraid', 0.0)),
+                gr.update(value=preset.get('disgusted', 0.0)),
+                gr.update(value=preset.get('melancholic', 0.0)),
+                gr.update(value=preset.get('surprised', 0.0)),
+                gr.update(value=preset.get('calm', 0.0))
+            ]
+        
         # ChatterboxTTS management
         if CHATTERBOX_AVAILABLE:
             load_chatterbox_btn.click(
@@ -6322,6 +7550,61 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 outputs=[indextts_status]
             )
         
+        # IndexTTS2 management
+        if INDEXTTS2_AVAILABLE:
+            load_indextts2_btn.click(
+                fn=handle_load_indextts2,
+                outputs=[indextts2_status, tts_engine, ebook_tts_engine, engine_tabs] if EBOOK_CONVERTER_AVAILABLE else [indextts2_status, tts_engine, engine_tabs]
+            )
+            unload_indextts2_btn.click(
+                fn=handle_unload_indextts2,
+                outputs=[indextts2_status]
+            )
+            
+            # IndexTTS2 emotion mode switching
+            indextts2_emotion_mode.change(
+                fn=handle_indextts2_emotion_mode_change,
+                inputs=[indextts2_emotion_mode],
+                outputs=[indextts2_audio_mode, indextts2_vector_mode, indextts2_text_mode]
+            )
+            
+            # Conversation mode IndexTTS2 emotion mode switching - individual handlers
+            speaker_1_emotion_mode.change(
+                fn=handle_speaker_1_emotion_mode_change,
+                inputs=[speaker_1_emotion_mode],
+                outputs=[speaker_1_emotion_audio, speaker_1_emotion_description, speaker_1_emotion_vectors]
+            )
+            speaker_2_emotion_mode.change(
+                fn=handle_speaker_2_emotion_mode_change,
+                inputs=[speaker_2_emotion_mode],
+                outputs=[speaker_2_emotion_audio, speaker_2_emotion_description, speaker_2_emotion_vectors]
+            )
+            speaker_3_emotion_mode.change(
+                fn=handle_speaker_3_emotion_mode_change,
+                inputs=[speaker_3_emotion_mode],
+                outputs=[speaker_3_emotion_audio, speaker_3_emotion_description, speaker_3_emotion_vectors]
+            )
+            speaker_4_emotion_mode.change(
+                fn=handle_speaker_4_emotion_mode_change,
+                inputs=[speaker_4_emotion_mode],
+                outputs=[speaker_4_emotion_audio, speaker_4_emotion_description, speaker_4_emotion_vectors]
+            )
+            speaker_5_emotion_mode.change(
+                fn=handle_speaker_5_emotion_mode_change,
+                inputs=[speaker_5_emotion_mode],
+                outputs=[speaker_5_emotion_audio, speaker_5_emotion_description, speaker_5_emotion_vectors]
+            )
+            
+            # IndexTTS2 emotion preset application
+            indextts2_apply_preset.click(
+                fn=apply_indextts2_emotion_preset,
+                inputs=[indextts2_emotion_preset],
+                outputs=[
+                    indextts2_happy, indextts2_angry, indextts2_sad, indextts2_afraid,
+                    indextts2_disgusted, indextts2_melancholic, indextts2_surprised, indextts2_calm
+                ]
+            )
+        
         # Higgs Audio management
         if HIGGS_AUDIO_AVAILABLE:
             load_higgs_btn.click(
@@ -6343,6 +7626,8 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 fn=handle_unload_kitten,
                 outputs=[kitten_status]
             )
+        
+
         
         # F5-TTS management functions
         def update_f5_model_status():
@@ -6479,6 +7764,11 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 kokoro_voice, kokoro_speed,
                 fish_ref_audio, fish_ref_text, fish_temperature, fish_top_p, fish_repetition_penalty, fish_max_tokens, fish_seed,
                 indextts_ref_audio, indextts_temperature, indextts_seed,
+                indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio, indextts2_emotion_description,
+                indextts2_emo_alpha, indextts2_happy, indextts2_angry, indextts2_sad, indextts2_afraid,
+                indextts2_disgusted, indextts2_melancholic, indextts2_surprised, indextts2_calm,
+                indextts2_temperature, indextts2_top_p, indextts2_top_k, indextts2_repetition_penalty,
+                indextts2_max_mel_tokens, indextts2_seed, indextts2_use_random,
                 f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed,
                 higgs_ref_audio, higgs_ref_text, higgs_voice_preset, higgs_system_prompt,
                 higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
@@ -6497,19 +7787,15 @@ Alice: I went to Japan. It was absolutely incredible!""",
             """Analyze the conversation script and return detected speakers."""
             if not script_text.strip():
                 return ("No script provided", 
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                        gr.update(visible=False), gr.update(visible=False), 
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-                        gr.update(visible=False), gr.update(visible=False))
+                        gr.update(visible=False), 
+                        *[gr.update(visible=False) for _ in range(20)])  # 5 audio + 5 kokoro + 5 kitten + 5 indextts2
             
             speakers = get_speaker_names_from_script(script_text)
             
             if not speakers:
                 return ("No speakers detected. Please check script format.", 
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), 
-                        gr.update(visible=False), gr.update(visible=False), 
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
-                        gr.update(visible=False), gr.update(visible=False))
+                        gr.update(visible=False), 
+                        *[gr.update(visible=False) for _ in range(20)])  # 5 audio + 5 kokoro + 5 kitten + 5 indextts2
             
             speakers_text = f"Found {len(speakers)} speakers:\n" + "\n".join([f"• {speaker}" for speaker in speakers])
             
@@ -6520,64 +7806,109 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 speakers_text += f"Click on the speaker names below to select voices.\n"
                 speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for Kokoro TTS\n3. Click 'Generate Conversation'"
                 
-                # Hide voice sample uploads, show Kokoro voice accordions
+                # Hide voice sample uploads, show Kokoro voice accordions, hide others
                 audio_updates = []
                 kokoro_accordion_updates = []
+                kitten_accordion_updates = []
+                indextts2_accordion_updates = []
+                
                 for i in range(5):
                     if i < len(speakers):
-                        # Hide audio upload, show Kokoro voice accordion with speaker name
+                        # Hide audio upload, show Kokoro voice accordion with speaker name, hide others
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=True, label=f"🗣️ {speakers[i]}"))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                     else:
-                        # Hide both audio upload and Kokoro voice accordion
+                        # Hide all components
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                 
-                all_updates = audio_updates + kokoro_accordion_updates
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates + indextts2_accordion_updates
+                
             elif selected_engine == "KittenTTS":
                 # For KittenTTS, show voice selection radio buttons
                 speakers_text += f"\n\n🐱 **Select KittenTTS Voices for Each Speaker:**\n"
                 speakers_text += f"Click on the speaker names below to select voices.\n"
                 speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for KittenTTS\n3. Click 'Generate Conversation'"
                 
-                # Hide voice sample uploads and Kokoro accordions, show KittenTTS accordions
+                # Hide voice sample uploads and other accordions, show KittenTTS accordions
                 audio_updates = []
                 kokoro_accordion_updates = []
                 kitten_accordion_updates = []
+                indextts2_accordion_updates = []
+                
                 for i in range(5):
                     if i < len(speakers):
-                        # Hide audio upload and Kokoro accordion, show KittenTTS accordion with speaker name
+                        # Hide audio upload and other accordions, show KittenTTS accordion with speaker name
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
                         kitten_accordion_updates.append(gr.update(visible=True, label=f"🐱 {speakers[i]}"))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                     else:
                         # Hide all components
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
                         kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                 
-                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates + indextts2_accordion_updates
+                
+            elif selected_engine == "IndexTTS2":
+                # For IndexTTS2, show voice samples and emotion controls
+                speakers_text += f"\n\n🎭 **Configure IndexTTS2 Emotions for Each Speaker:**\n"
+                speakers_text += f"Upload voice samples and configure emotion settings below.\n"
+                speakers_text += f"\n📝 **Instructions:**\n1. Upload voice samples for each speaker ✅\n2. Click each speaker's emotion accordion to configure emotions 🎭\n3. Click 'Generate Conversation'"
+                
+                # Show voice sample uploads and IndexTTS2 emotion accordions, hide others
+                audio_updates = []
+                kokoro_accordion_updates = []
+                kitten_accordion_updates = []
+                indextts2_accordion_updates = []
+                
+                for i in range(5):
+                    if i < len(speakers):
+                        # Show audio upload and IndexTTS2 emotion accordion with speaker name, hide others
+                        audio_updates.append(gr.update(visible=True, label=f"🎤 {speakers[i]} Voice Sample"))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=True, label=f"🎭 {speakers[i]} IndexTTS2 Emotions"))
+                    else:
+                        # Hide all components
+                        audio_updates.append(gr.update(visible=False))
+                        kokoro_accordion_updates.append(gr.update(visible=False))
+                        kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
+                
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates + indextts2_accordion_updates
+                
             else:
                 # For other engines, show upload instructions
                 speakers_text += f"\n\n📝 **Instructions:**\n1. Upload voice samples below\n2. Select TTS engine\n3. Click 'Generate Conversation'"
                 
-                # Show/hide voice sample uploads based on number of speakers, hide Kokoro and KittenTTS accordions
+                # Show/hide voice sample uploads based on number of speakers, hide all accordions
                 audio_updates = []
                 kokoro_accordion_updates = []
                 kitten_accordion_updates = []
+                indextts2_accordion_updates = []
+                
                 for i in range(5):
                     if i < len(speakers):
-                        # Show audio upload with speaker name, hide voice accordions
+                        # Show audio upload with speaker name, hide all accordions
                         audio_updates.append(gr.update(visible=True, label=f"🎤 {speakers[i]} Voice Sample"))
                         kokoro_accordion_updates.append(gr.update(visible=False))
                         kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                     else:
                         # Hide all components
                         audio_updates.append(gr.update(visible=False))
                         kokoro_accordion_updates.append(gr.update(visible=False))
                         kitten_accordion_updates.append(gr.update(visible=False))
+                        indextts2_accordion_updates.append(gr.update(visible=False))
                 
-                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
+                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates + indextts2_accordion_updates
             
             # Show the conversation generate button when analysis is successful
             generate_btn_update = gr.update(visible=True)
@@ -6598,89 +7929,21 @@ Alice: The food was unbelievable, and the people were so kind.
 Bob: I'd love to visit Japan someday. Any recommendations?
 Alice: Definitely visit Kyoto and try authentic ramen!"""
             
-            # Auto-analyze the example script
-            speakers = get_speaker_names_from_script(example_script)
-            speakers_text = f"Found {len(speakers)} speakers:\n" + "\n".join([f"• {speaker}" for speaker in speakers])
+            # Auto-analyze the example script and return the same format as handle_analyze_script
+            result = handle_analyze_script(example_script, selected_engine)
             
-            # Different instructions based on selected engine
-            if selected_engine == "Kokoro TTS":
-                # For Kokoro TTS, show voice selection radio buttons
-                speakers_text += f"\n\n🗣️ **Select Kokoro Voices for Each Speaker:**\n"
-                speakers_text += f"Click on the speaker names below to select voices.\n"
-                speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for Kokoro TTS\n3. Click 'Generate Conversation'"
-                
-                # Hide voice sample uploads, show Kokoro voice accordions
-                audio_updates = []
-                kokoro_accordion_updates = []
-                for i in range(5):
-                    if i < len(speakers):
-                        # Hide audio upload, show Kokoro voice accordion with speaker name
-                        audio_updates.append(gr.update(visible=False))
-                        kokoro_accordion_updates.append(gr.update(visible=True, label=f"🗣️ {speakers[i]}"))
-                    else:
-                        # Hide both audio upload and Kokoro voice accordion
-                        audio_updates.append(gr.update(visible=False))
-                        kokoro_accordion_updates.append(gr.update(visible=False))
-                
-                all_updates = audio_updates + kokoro_accordion_updates
-            elif selected_engine == "KittenTTS":
-                # For KittenTTS, show voice selection radio buttons
-                speakers_text += f"\n\n🐱 **Select KittenTTS Voices for Each Speaker:**\n"
-                speakers_text += f"Click on the speaker names below to select voices.\n"
-                speakers_text += f"\n📝 **Instructions:**\n1. Click each speaker accordion to select their voice ✅\n2. Voice samples not needed for KittenTTS\n3. Click 'Generate Conversation'"
-                
-                # Hide voice sample uploads and Kokoro accordions, show KittenTTS accordions
-                audio_updates = []
-                kokoro_accordion_updates = []
-                kitten_accordion_updates = []
-                for i in range(5):
-                    if i < len(speakers):
-                        # Hide audio upload and Kokoro accordion, show KittenTTS accordion with speaker name
-                        audio_updates.append(gr.update(visible=False))
-                        kokoro_accordion_updates.append(gr.update(visible=False))
-                        kitten_accordion_updates.append(gr.update(visible=True, label=f"🐱 {speakers[i]}"))
-                    else:
-                        # Hide all components
-                        audio_updates.append(gr.update(visible=False))
-                        kokoro_accordion_updates.append(gr.update(visible=False))
-                        kitten_accordion_updates.append(gr.update(visible=False))
-                
-                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
-            else:
-                # For other engines, show upload instructions
-                speakers_text += f"\n\n📝 **Instructions:**\n1. Upload voice samples below\n2. Select TTS engine\n3. Click 'Generate Conversation'"
-                
-                # Show/hide voice sample uploads based on number of speakers, hide Kokoro and KittenTTS accordions
-                audio_updates = []
-                kokoro_accordion_updates = []
-                kitten_accordion_updates = []
-                for i in range(5):
-                    if i < len(speakers):
-                        # Show audio upload with speaker name, hide voice accordions
-                        audio_updates.append(gr.update(visible=True, label=f"🎤 {speakers[i]} Voice Sample"))
-                        kokoro_accordion_updates.append(gr.update(visible=False))
-                        kitten_accordion_updates.append(gr.update(visible=False))
-                    else:
-                        # Hide all components
-                        audio_updates.append(gr.update(visible=False))
-                        kokoro_accordion_updates.append(gr.update(visible=False))
-                        kitten_accordion_updates.append(gr.update(visible=False))
-                
-                all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
-            
-            # Show the conversation generate button when example is loaded
-            generate_btn_update = gr.update(visible=True)
-            
-            return example_script, speakers_text, generate_btn_update, *all_updates
+            # Return the script plus all the analysis results
+            return example_script, *result
         
         def handle_clear_script():
             """Clear the conversation script and reset components."""
-            # Hide all audio components, Kokoro voice accordions, KittenTTS accordions, and the generate button
+            # Hide all audio components, Kokoro voice accordions, KittenTTS accordions, IndexTTS2 accordions, and the generate button
             audio_updates = [gr.update(visible=False, value=None) for _ in range(5)]
             kokoro_accordion_updates = [gr.update(visible=False) for _ in range(5)]
             kitten_accordion_updates = [gr.update(visible=False) for _ in range(5)]
+            indextts2_accordion_updates = [gr.update(visible=False) for _ in range(5)]
             generate_btn_update = gr.update(visible=False)
-            all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates
+            all_updates = audio_updates + kokoro_accordion_updates + kitten_accordion_updates + indextts2_accordion_updates
             return "", "No speakers detected", generate_btn_update, *all_updates
         
         def handle_tts_engine_change(selected_engine):
@@ -6700,7 +7963,7 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 gr.update(interactive=True),  # Enable transition pause slider
             )
 
-        def handle_generate_conversation_advanced(script_text, pause_duration, transition_pause, audio_format, voice_samples, kokoro_voices, kitten_voices, selected_engine):
+        def handle_generate_conversation_advanced(script_text, pause_duration, transition_pause, audio_format, voice_samples, kokoro_voices, kitten_voices, selected_engine, emotion_modes=None, emotion_audios=None, emotion_descriptions=None, emotion_vectors=None):
             """Generate the multi-voice conversation with voice samples or Kokoro voice selections."""
             print(f"🎭 Conversation handler called with engine: {selected_engine}")
             
@@ -6724,6 +7987,21 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     result = generate_conversation_audio_kitten(
                         script_text,
                         kitten_voices,
+                        selected_engine=selected_engine,
+                        conversation_pause_duration=pause_duration,
+                        speaker_transition_pause=transition_pause,
+                        effects_settings=None,
+                        audio_format=audio_format
+                    )
+                elif selected_engine == "IndexTTS2":
+                    # For IndexTTS2, use emotion controls
+                    result = generate_conversation_audio_indextts2(
+                        script_text,
+                        voice_samples,
+                        emotion_modes or [],
+                        emotion_audios or [],
+                        emotion_descriptions or [],
+                        emotion_vectors or [],
                         selected_engine=selected_engine,
                         conversation_pause_duration=pause_duration,
                         speaker_transition_pause=transition_pause,
@@ -6805,7 +8083,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
                     speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
                     speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
-                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion,
+                    speaker_1_indextts2_accordion, speaker_2_indextts2_accordion, speaker_3_indextts2_accordion,
+                    speaker_4_indextts2_accordion, speaker_5_indextts2_accordion]
         )
         
 
@@ -6819,7 +8099,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
                     speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
                     speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
-                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion,
+                    speaker_1_indextts2_accordion, speaker_2_indextts2_accordion, speaker_3_indextts2_accordion,
+                    speaker_4_indextts2_accordion, speaker_5_indextts2_accordion]
         )
         
         clear_script_btn.click(
@@ -6830,12 +8112,30 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_1_kokoro_accordion, speaker_2_kokoro_accordion, speaker_3_kokoro_accordion,
                     speaker_4_kokoro_accordion, speaker_5_kokoro_accordion,
                     speaker_1_kitten_accordion, speaker_2_kitten_accordion, speaker_3_kitten_accordion,
-                    speaker_4_kitten_accordion, speaker_5_kitten_accordion]
+                    speaker_4_kitten_accordion, speaker_5_kitten_accordion,
+                    speaker_1_indextts2_accordion, speaker_2_indextts2_accordion, speaker_3_indextts2_accordion,
+                    speaker_4_indextts2_accordion, speaker_5_indextts2_accordion]
         )
         
         generate_conversation_btn.click(
-            fn=lambda script, pause, trans_pause, audio_fmt, s1, s2, s3, s4, s5, kv1, kv2, kv3, kv4, kv5, ktv1, ktv2, ktv3, ktv4, ktv5, engine: handle_generate_conversation_advanced(
-                script, pause, trans_pause, audio_fmt, [s1, s2, s3, s4, s5], [kv1, kv2, kv3, kv4, kv5], [ktv1, ktv2, ktv3, ktv4, ktv5], engine
+            fn=lambda script, pause, trans_pause, audio_fmt, s1, s2, s3, s4, s5, kv1, kv2, kv3, kv4, kv5, ktv1, ktv2, ktv3, ktv4, ktv5, engine, \
+                     em1, ea1, ed1, h1, s1_sad, a1, af1, su1, c1, \
+                     em2, ea2, ed2, h2, s2_sad, a2, af2, su2, c2, \
+                     em3, ea3, ed3, h3, s3_sad, a3, af3, su3, c3, \
+                     em4, ea4, ed4, h4, s4_sad, a4, af4, su4, c4, \
+                     em5, ea5, ed5, h5, s5_sad, a5, af5, su5, c5: handle_generate_conversation_advanced(
+                script, pause, trans_pause, audio_fmt, [s1, s2, s3, s4, s5], [kv1, kv2, kv3, kv4, kv5], [ktv1, ktv2, ktv3, ktv4, ktv5], engine,
+                # IndexTTS2 emotion parameters
+                [em1, em2, em3, em4, em5],  # emotion_modes
+                [ea1, ea2, ea3, ea4, ea5],  # emotion_audios
+                [ed1, ed2, ed3, ed4, ed5],  # emotion_descriptions
+                [
+                    {'happy': h1, 'sad': s1_sad, 'angry': a1, 'afraid': af1, 'surprised': su1, 'calm': c1},
+                    {'happy': h2, 'sad': s2_sad, 'angry': a2, 'afraid': af2, 'surprised': su2, 'calm': c2},
+                    {'happy': h3, 'sad': s3_sad, 'angry': a3, 'afraid': af3, 'surprised': su3, 'calm': c3},
+                    {'happy': h4, 'sad': s4_sad, 'angry': a4, 'afraid': af4, 'surprised': su4, 'calm': c4},
+                    {'happy': h5, 'sad': s5_sad, 'angry': a5, 'afraid': af5, 'surprised': su5, 'calm': c5}
+                ]  # emotion_vectors
             ),
             inputs=[
                 conversation_script, 
@@ -6848,7 +8148,18 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 speaker_4_kokoro_voice, speaker_5_kokoro_voice,
                 speaker_1_kitten_voice, speaker_2_kitten_voice, speaker_3_kitten_voice,
                 speaker_4_kitten_voice, speaker_5_kitten_voice,
-                tts_engine  # Use the main TTS engine selector
+                tts_engine,  # Use the main TTS engine selector
+                # IndexTTS2 emotion controls
+                speaker_1_emotion_mode, speaker_1_emotion_audio, speaker_1_emotion_description,
+                speaker_1_happy, speaker_1_sad, speaker_1_angry, speaker_1_afraid, speaker_1_surprised, speaker_1_calm,
+                speaker_2_emotion_mode, speaker_2_emotion_audio, speaker_2_emotion_description,
+                speaker_2_happy, speaker_2_sad, speaker_2_angry, speaker_2_afraid, speaker_2_surprised, speaker_2_calm,
+                speaker_3_emotion_mode, speaker_3_emotion_audio, speaker_3_emotion_description,
+                speaker_3_happy, speaker_3_sad, speaker_3_angry, speaker_3_afraid, speaker_3_surprised, speaker_3_calm,
+                speaker_4_emotion_mode, speaker_4_emotion_audio, speaker_4_emotion_description,
+                speaker_4_happy, speaker_4_sad, speaker_4_angry, speaker_4_afraid, speaker_4_surprised, speaker_4_calm,
+                speaker_5_emotion_mode, speaker_5_emotion_audio, speaker_5_emotion_description,
+                speaker_5_happy, speaker_5_sad, speaker_5_angry, speaker_5_afraid, speaker_5_surprised, speaker_5_calm
             ],
             outputs=[audio_output, conversation_info]  # Use same audio output as single voice mode
         )
@@ -6918,6 +8229,13 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 fish_ref_audio, fish_ref_text, fish_temp, fish_top_p, fish_rep_pen, fish_max_tok, fish_seed_val,
                 # IndexTTS parameters
                 idx_ref_audio, idx_temp, idx_seed,
+                # IndexTTS2 parameters
+                indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio,
+                indextts2_emotion_description, indextts2_emo_alpha, indextts2_happy, indextts2_angry,
+                indextts2_sad, indextts2_afraid, indextts2_disgusted, indextts2_melancholic,
+                indextts2_surprised, indextts2_calm, indextts2_temperature, indextts2_top_p,
+                indextts2_top_k, indextts2_repetition_penalty, indextts2_max_mel_tokens,
+                indextts2_seed, indextts2_use_random,
                 # F5-TTS parameters
                 f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed_val,
                 # Higgs Audio parameters
@@ -6944,6 +8262,13 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     fish_ref_audio, fish_ref_text, fish_temp, fish_top_p, fish_rep_pen, fish_max_tok, fish_seed_val,
                     # IndexTTS parameters
                     idx_ref_audio, idx_temp, idx_seed,
+                    # IndexTTS2 parameters
+                    indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio,
+                    indextts2_emotion_description, indextts2_emo_alpha, indextts2_happy, indextts2_angry,
+                    indextts2_sad, indextts2_afraid, indextts2_disgusted, indextts2_melancholic,
+                    indextts2_surprised, indextts2_calm, indextts2_temperature, indextts2_top_p,
+                    indextts2_top_k, indextts2_repetition_penalty, indextts2_max_mel_tokens,
+                    indextts2_seed, indextts2_use_random,
                     # F5-TTS parameters
                     f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed_val,
                     # Higgs Audio parameters
@@ -7007,6 +8332,13 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     fish_repetition_penalty, fish_max_tokens, fish_seed,
                     # IndexTTS parameters
                     indextts_ref_audio, indextts_temperature, indextts_seed,
+                    # IndexTTS2 parameters
+                    indextts2_ref_audio, indextts2_emotion_mode, indextts2_emotion_audio,
+                    indextts2_emotion_description, indextts2_emo_alpha, indextts2_happy, indextts2_angry,
+                    indextts2_sad, indextts2_afraid, indextts2_disgusted, indextts2_melancholic,
+                    indextts2_surprised, indextts2_calm, indextts2_temperature, indextts2_top_p,
+                    indextts2_top_k, indextts2_repetition_penalty, indextts2_max_mel_tokens,
+                    indextts2_seed, indextts2_use_random,
                     # F5-TTS parameters
                     f5_ref_audio, f5_ref_text, f5_speed, f5_cross_fade, f5_remove_silence, f5_seed,
                     # Higgs Audio parameters
@@ -7062,6 +8394,164 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
             refresh_voices_btn.click(
                 fn=get_custom_voice_list,
                 outputs=[custom_voice_list]
+            )
+        
+        # VibeVoice event handlers (only if VibeVoice is available)
+        if VIBEVOICE_AVAILABLE:
+            print("✅ VibeVoice is available, setting up event handlers...")
+            # Update speaker dropdowns based on number of speakers
+            def update_speaker_visibility(num_speakers):
+                return [
+                    gr.update(visible=True),  # Speaker 1 always visible
+                    gr.update(visible=num_speakers >= 2),  # Speaker 2 visible for 2+ speakers
+                    gr.update(visible=num_speakers >= 3),  # Speaker 3 visible for 3+ speakers
+                    gr.update(visible=num_speakers >= 4)   # Speaker 4 visible for 4 speakers
+                ]
+            
+            vibevoice_num_speakers.change(
+                fn=update_speaker_visibility,
+                inputs=[vibevoice_num_speakers],
+                outputs=[vibevoice_speaker_1, vibevoice_speaker_2, vibevoice_speaker_3, vibevoice_speaker_4]
+            )
+            
+            # Model management
+            def handle_vibevoice_load(selected_model_path, path):
+                # Prefer radio selection; fall back to manual path
+                effective_path = selected_model_path or path
+                if not effective_path:
+                    return "❌ No model path selected"
+                success, message = init_vibevoice_model(effective_path)
+                return message
+            
+            def handle_vibevoice_unload():
+                return unload_vibevoice_model()
+            
+            vibevoice_load_btn.click(
+                fn=handle_vibevoice_load,
+                inputs=[vibevoice_downloaded_models, vibevoice_model_path],
+                outputs=[vibevoice_model_status]
+            )
+            
+            vibevoice_unload_btn.click(
+                fn=handle_vibevoice_unload,
+                inputs=[],
+                outputs=[vibevoice_model_status]
+            )
+            
+            # Model download
+            def handle_vibevoice_download(model_name):
+                if not VIBEVOICE_AVAILABLE:
+                    yield "❌ VibeVoice not available"
+                    return
+                
+                if not model_name:
+                    yield "❌ No model selected"
+                    return
+                
+                # Immediate feedback
+                yield f"📥 Starting download for {model_name}... This may take a while."
+                
+                try:
+                    handler = get_vibevoice_handler()
+                    success, message = handler.download_model(model_name)
+                    yield message
+                except Exception as e:
+                    yield f"❌ Error in download handler: {str(e)}"
+            
+            print("🔗 Connecting download button click handler...")
+            vibevoice_download_btn.click(
+                fn=handle_vibevoice_download,
+                inputs=[vibevoice_model_select],
+                outputs=[vibevoice_download_status],
+                queue=True
+            )
+            print("✅ Download button handler connected!")
+            
+            # Refresh voice dropdowns function
+            def refresh_vibevoice_voices():
+                if not VIBEVOICE_AVAILABLE:
+                    return gr.update(), gr.update(), gr.update(), gr.update()
+                
+                handler = get_vibevoice_handler()
+                voices = handler.get_available_voices()
+                voice_choices = gr.update(choices=voices)
+                
+                return voice_choices, voice_choices, voice_choices, voice_choices
+
+            # Refresh downloaded models list
+            def refresh_vibevoice_model_list():
+                if not VIBEVOICE_AVAILABLE:
+                    return gr.update(choices=[], value=None)
+                models = scan_vibevoice_models()
+                if not models:
+                    models = []
+                default_value = models[0] if len(models) > 0 else None
+                return gr.update(choices=models, value=default_value)
+            
+            # Refresh voices button handler
+            vibevoice_refresh_voices_btn.click(
+                fn=refresh_vibevoice_voices,
+                inputs=[],
+                outputs=[vibevoice_speaker_1, vibevoice_speaker_2, vibevoice_speaker_3, vibevoice_speaker_4]
+            )
+
+            # Refresh models button handler
+            vibevoice_refresh_models_btn.click(
+                fn=refresh_vibevoice_model_list,
+                inputs=[],
+                outputs=[vibevoice_downloaded_models]
+            )
+            
+            # Add custom voice
+            def handle_add_custom_voice(audio_file, voice_name):
+                if not VIBEVOICE_AVAILABLE:
+                    return "❌ VibeVoice not available", gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                
+                try:
+                    handler = get_vibevoice_handler()
+                    result = handler.add_custom_voice(audio_file, voice_name)
+                    
+                    # Refresh voice lists
+                    voices = handler.get_available_voices()
+                    voice_choices = gr.update(choices=voices)
+                    
+                    return result, voice_choices, voice_choices, voice_choices, voice_choices, ""
+                except Exception as e:
+                    return f"❌ Error in add voice handler: {str(e)}", gr.update(), gr.update(), gr.update(), gr.update(), ""
+            
+            add_voice_btn.click(
+                fn=handle_add_custom_voice,
+                inputs=[custom_voice_file, vibevoice_custom_voice_name],
+                outputs=[add_voice_status, vibevoice_speaker_1, vibevoice_speaker_2, 
+                        vibevoice_speaker_3, vibevoice_speaker_4, vibevoice_custom_voice_name]
+            )
+            
+            # Generate podcast
+            def handle_vibevoice_generation(num_speakers, script, speaker_1, speaker_2, speaker_3, speaker_4, cfg_scale, seed):
+                if not VIBEVOICE_AVAILABLE:
+                    return None, "❌ VibeVoice not available"
+                
+                # Collect speaker voices
+                speaker_voices = [speaker_1, speaker_2, speaker_3, speaker_4][:num_speakers]
+                
+                # Generate podcast
+                audio_result, status = generate_vibevoice_podcast(
+                    num_speakers=num_speakers,
+                    script=script,
+                    speaker_voices=speaker_voices,
+                    cfg_scale=cfg_scale,
+                    seed=int(seed) if seed is not None else None,
+                    output_folder="outputs"
+                )
+                
+                return audio_result, status
+            
+            vibevoice_generate_btn.click(
+                fn=handle_vibevoice_generation,
+                inputs=[vibevoice_num_speakers, vibevoice_script, vibevoice_speaker_1, 
+                       vibevoice_speaker_2, vibevoice_speaker_3, vibevoice_speaker_4,
+                       vibevoice_cfg_scale, vibevoice_seed],
+                outputs=[vibevoice_output, vibevoice_status]
             )
     
     return demo

@@ -89,7 +89,21 @@ class HiggsAudioTokenizer(nn.Module):
             self.encoder_semantic_dim = 768
 
         elif semantic_techer == "hubert_base_general":
-            self.semantic_model = AutoModel.from_pretrained("ZhenYe234/hubert_base_general_audio")
+            # Strictly use the general HuBERT model; resolve to a local snapshot path
+            try:
+                local_repo_path = snapshot_download(
+                    repo_id="ZhenYe234/hubert_base_general_audio",
+                    cache_dir=os.environ.get('HF_HOME') or os.environ.get('HF_HUB_CACHE') or None,
+                    local_dir_use_symlinks=False,
+                )
+            except Exception:
+                # If snapshot resolution fails here, let transformers try with the repo id
+                local_repo_path = "ZhenYe234/hubert_base_general_audio"
+            # Prefer loading from the resolved local path, forcing local files only when a path is present
+            if os.path.isdir(local_repo_path):
+                self.semantic_model = AutoModel.from_pretrained(local_repo_path, local_files_only=True)
+            else:
+                self.semantic_model = AutoModel.from_pretrained(local_repo_path)
             self.semantic_sample_rate = 16000
             self.semantic_dim = 768
             self.encoder_semantic_dim = 768
@@ -177,7 +191,12 @@ class HiggsAudioTokenizer(nn.Module):
         ):
             x = x[:, 0, :]
             x = F.pad(x, (160, 160))
-            target = self.semantic_model(x, output_hidden_states=True).hidden_states
+            semantic_output = self.semantic_model(x, output_hidden_states=True)
+            if hasattr(semantic_output, 'hidden_states'):
+                target = semantic_output.hidden_states
+            else:
+                # Handle case where output format changed
+                target = semantic_output[0] if isinstance(semantic_output, (tuple, list)) else semantic_output
             target = torch.stack(target, dim=1)  # .transpose(-1, -2)#.flatten(start_dim=1, end_dim=2)
 
             # average for all layers
@@ -187,22 +206,26 @@ class HiggsAudioTokenizer(nn.Module):
             #     target = self.semantic_pooling(target.transpose(1, 2)).transpose(1, 2)
 
         elif self.semantic_techer == "w2v_bert2":
-            target = self.semantic_model(x)
+            semantic_output = self.semantic_model(x)
+            target = semantic_output[0] if isinstance(semantic_output, (tuple, list)) else semantic_output
 
         elif self.semantic_techer.startswith("whisper"):
             if self.last_layer_semantic:
-                target = self.semantic_model(x, avg_layers=False)
+                semantic_output = self.semantic_model(x, avg_layers=False)
             else:
-                target = self.semantic_model(x, avg_layers=True)
+                semantic_output = self.semantic_model(x, avg_layers=True)
+            target = semantic_output[0] if isinstance(semantic_output, (tuple, list)) else semantic_output
 
         elif self.semantic_techer.startswith("mert_music"):
             if self.last_layer_semantic:
-                target = self.semantic_model(x, avg_layers=False)
+                semantic_output = self.semantic_model(x, avg_layers=False)
             else:
-                target = self.semantic_model(x, avg_layers=True)
+                semantic_output = self.semantic_model(x, avg_layers=True)
+            target = semantic_output[0] if isinstance(semantic_output, (tuple, list)) else semantic_output
 
         elif self.semantic_techer.startswith("qwen_audio_omni"):
-            target = self.semantic_model(x)
+            semantic_output = self.semantic_model(x)
+            target = semantic_output[0] if isinstance(semantic_output, (tuple, list)) else semantic_output
 
         if self.downsample_mode == "step_down":
             if self.semantic_downsample_factor > 1:
@@ -298,7 +321,15 @@ class HiggsAudioTokenizer(nn.Module):
 
         if self.quantizer_type == "RVQ":
             e = e.transpose(1, 2)
-            quantized, codes, bandwidth, commit_loss = self.quantizer(e, self.frame_rate, bw)
+            quantizer_output = self.quantizer(e, self.frame_rate, bw)
+            if len(quantizer_output) == 4:
+                quantized, codes, bandwidth, commit_loss = quantizer_output
+            elif len(quantizer_output) == 3:
+                quantized, codes, bandwidth = quantizer_output
+                commit_loss = None
+            else:
+                quantized, codes = quantizer_output
+                bandwidth = commit_loss = None
             codes = codes.permute(1, 0, 2)
         else:
             quantized, codes = self.quantizer(e)

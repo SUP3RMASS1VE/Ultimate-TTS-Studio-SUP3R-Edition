@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Optional, Union, Tuple, Dict, Any
 from datetime import datetime
+from contextlib import contextmanager
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -33,6 +34,13 @@ except ImportError as e:
     HIGGS_AUDIO_AVAILABLE = False
     print(f"⚠️ Higgs Audio not available: {e}")
 
+# Optional: local snapshot downloader (keeps Higgs isolated from global HF cache)
+try:
+    from huggingface_hub import snapshot_download
+    HF_HUB_AVAILABLE = True
+except Exception:
+    HF_HUB_AVAILABLE = False
+
 class HiggsAudioHandler:
     """Handler for Higgs Audio TTS system"""
     
@@ -43,6 +51,12 @@ class HiggsAudioHandler:
         self.sample_rate = 24000
         self.device = self._get_device()
         self.voice_presets = self._load_voice_presets()
+        # Create an isolated cache for Higgs only
+        self.higgs_cache_dir = os.path.join(current_dir, 'checkpoints', 'higgs_audio', 'cache')
+        try:
+            os.makedirs(self.higgs_cache_dir, exist_ok=True)
+        except Exception:
+            pass
         
         # Default system prompt
         self.default_system_prompt = (
@@ -90,11 +104,16 @@ class HiggsAudioHandler:
             
         try:
             print(f"🎤 Initializing Higgs Audio engine on {self.device}...")
-            self.engine = HiggsAudioServeEngine(
-                model_name_or_path=self.model_path,
-                audio_tokenizer_name_or_path=self.audio_tokenizer_path,
-                device=self.device,
-            )
+            # Resolve local snapshot paths (download into an isolated cache if needed)
+            local_model_path, local_tokenizer_path = self._ensure_local_higgs_snapshots()
+
+            # Ensure any additional dependencies (e.g., HuBERT/WavLM) download into the isolated cache
+            with self._temporary_hf_env_for_higgs():
+                self.engine = HiggsAudioServeEngine(
+                    model_name_or_path=local_model_path or self.model_path,
+                    audio_tokenizer_name_or_path=local_tokenizer_path or self.audio_tokenizer_path,
+                    device=self.device,
+                )
             print(f"✅ Higgs Audio engine initialized successfully")
             return True
         except Exception as e:
@@ -104,17 +123,136 @@ class HiggsAudioHandler:
                 try:
                     print("🔄 Attempting CPU fallback...")
                     self.device = "cpu"
-                    self.engine = HiggsAudioServeEngine(
-                        model_name_or_path=self.model_path,
-                        audio_tokenizer_name_or_path=self.audio_tokenizer_path,
-                        device="cpu",
-                    )
+                    # Re-resolve local paths (ensures availability for CPU path too)
+                    local_model_path, local_tokenizer_path = self._ensure_local_higgs_snapshots()
+                    with self._temporary_hf_env_for_higgs():
+                        self.engine = HiggsAudioServeEngine(
+                            model_name_or_path=local_model_path or self.model_path,
+                            audio_tokenizer_name_or_path=local_tokenizer_path or self.audio_tokenizer_path,
+                            device="cpu",
+                        )
                     print("✅ Higgs Audio engine initialized on CPU")
                     return True
                 except Exception as cpu_e:
                     print(f"❌ CPU fallback also failed: {cpu_e}")
                     return False
             return False
+
+    @contextmanager
+    def _temporary_hf_env_for_higgs(self):
+        """Temporarily set HF caches to the Higgs cache and disable offline mode."""
+        original_env = {
+            'TRANSFORMERS_OFFLINE': os.environ.get('TRANSFORMERS_OFFLINE'),
+            'HF_HUB_OFFLINE': os.environ.get('HF_HUB_OFFLINE'),
+            'HF_HOME': os.environ.get('HF_HOME'),
+            'TRANSFORMERS_CACHE': os.environ.get('TRANSFORMERS_CACHE'),
+            'HF_HUB_CACHE': os.environ.get('HF_HUB_CACHE'),
+            'HUGGINGFACE_HUB_CACHE': os.environ.get('HUGGINGFACE_HUB_CACHE'),
+        }
+        try:
+            os.environ.pop('TRANSFORMERS_OFFLINE', None)
+            os.environ.pop('HF_HUB_OFFLINE', None)
+            os.environ['HF_HOME'] = self.higgs_cache_dir
+            os.environ['TRANSFORMERS_CACHE'] = self.higgs_cache_dir
+            os.environ['HF_HUB_CACHE'] = self.higgs_cache_dir
+            os.environ['HUGGINGFACE_HUB_CACHE'] = self.higgs_cache_dir
+            yield
+        finally:
+            for k, v in original_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def _ensure_local_higgs_snapshots(self) -> Tuple[Optional[str], Optional[str]]:
+        """Ensure Higgs model and tokenizer are available locally under the isolated cache.
+
+        Returns a tuple of (model_path, tokenizer_path). If downloads are not possible, returns (None, None)
+        and the caller should fall back to remote repo IDs. This method temporarily clears offline flags
+        and points HF caches to the isolated directory, then restores the original environment.
+        """
+        # If downloader not available, attempt best-effort by letting downstream loaders fetch into our cache
+        if not HF_HUB_AVAILABLE:
+            print("⚠️ huggingface_hub not available; will attempt on-the-fly download during load")
+            # Temporarily allow online and set caches so that any downstream download lands in our folder
+            original_env = {
+                'TRANSFORMERS_OFFLINE': os.environ.get('TRANSFORMERS_OFFLINE'),
+                'HF_HUB_OFFLINE': os.environ.get('HF_HUB_OFFLINE'),
+                'HF_HOME': os.environ.get('HF_HOME'),
+                'TRANSFORMERS_CACHE': os.environ.get('TRANSFORMERS_CACHE'),
+                'HF_HUB_CACHE': os.environ.get('HF_HUB_CACHE'),
+                'HUGGINGFACE_HUB_CACHE': os.environ.get('HUGGINGFACE_HUB_CACHE')
+            }
+            try:
+                os.environ.pop('TRANSFORMERS_OFFLINE', None)
+                os.environ.pop('HF_HUB_OFFLINE', None)
+                os.environ['HF_HOME'] = self.higgs_cache_dir
+                os.environ['TRANSFORMERS_CACHE'] = self.higgs_cache_dir
+                os.environ['HF_HUB_CACHE'] = self.higgs_cache_dir
+                os.environ['HUGGINGFACE_HUB_CACHE'] = self.higgs_cache_dir
+            except Exception:
+                pass
+            finally:
+                # Do not restore yet; the caller will load immediately and then we restore here
+                # Restore right away because we pass back None to indicate remote IDs will be used.
+                for k, v in original_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+            return None, None
+
+        # With huggingface_hub available, use snapshot_download for both repos
+        original_env = {
+            'TRANSFORMERS_OFFLINE': os.environ.get('TRANSFORMERS_OFFLINE'),
+            'HF_HUB_OFFLINE': os.environ.get('HF_HUB_OFFLINE'),
+            'HF_HOME': os.environ.get('HF_HOME'),
+            'TRANSFORMERS_CACHE': os.environ.get('TRANSFORMERS_CACHE'),
+            'HF_HUB_CACHE': os.environ.get('HF_HUB_CACHE'),
+            'HUGGINGFACE_HUB_CACHE': os.environ.get('HUGGINGFACE_HUB_CACHE')
+        }
+        try:
+            # Ensure online and route caches to the isolated directory for the download only
+            os.environ.pop('TRANSFORMERS_OFFLINE', None)
+            os.environ.pop('HF_HUB_OFFLINE', None)
+            os.environ['HF_HOME'] = self.higgs_cache_dir
+            os.environ['TRANSFORMERS_CACHE'] = self.higgs_cache_dir
+            os.environ['HF_HUB_CACHE'] = self.higgs_cache_dir
+            os.environ['HUGGINGFACE_HUB_CACHE'] = self.higgs_cache_dir
+
+            print("🔽 Ensuring local Higgs snapshots (isolated cache)...")
+            model_local = snapshot_download(
+                repo_id=self.model_path,
+                cache_dir=self.higgs_cache_dir,
+                local_dir_use_symlinks=False
+            )
+            tokenizer_local = snapshot_download(
+                repo_id=self.audio_tokenizer_path,
+                cache_dir=self.higgs_cache_dir,
+                local_dir_use_symlinks=False
+            )
+            # Also ensure required semantic model is cached locally
+            try:
+                print("   🔽 Ensuring HuBERT general model snapshot...")
+                snapshot_download(
+                    repo_id="ZhenYe234/hubert_base_general_audio",
+                    cache_dir=self.higgs_cache_dir,
+                    local_dir_use_symlinks=False
+                )
+            except Exception as he:
+                print(f"   ⚠️ HuBERT general model snapshot issue: {he}")
+            print("   ✅ Higgs snapshots ready")
+            return model_local, tokenizer_local
+        except Exception as e:
+            print(f"   ❌ Higgs snapshot check failed: {e}")
+            return None, None
+        finally:
+            # Restore original env to avoid impacting other handlers (e.g., IndexTTS2)
+            for k, v in original_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
     
     def _encode_audio_file(self, file_path: str) -> str:
         """Encode an audio file to base64"""

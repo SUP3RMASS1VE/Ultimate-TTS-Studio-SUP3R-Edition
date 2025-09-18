@@ -347,7 +347,7 @@ class HiggsAudioServeEngine:
                 raw_audio = None
 
             if raw_audio is not None:
-                audio_ids = self.audio_tokenizer.encode(raw_audio, self.audio_tokenizer.sampling_rate)
+                audio_ids = self.audio_tokenizer.encode(raw_audio, sr=self.audio_tokenizer.sampling_rate)
                 audio_ids_l.append(audio_ids.squeeze(0).cpu())
 
         if len(audio_ids_l) > 0:
@@ -430,6 +430,7 @@ class HiggsAudioServeEngine:
                 past_key_values_buckets=self.kv_caches,
                 ras_win_len=ras_win_len,
                 ras_win_max_num_repeat=ras_win_max_num_repeat,
+                return_dict_in_generate=False,  # Force tuple return format for compatibility
             )
 
             if len(outputs[1]) > 0:

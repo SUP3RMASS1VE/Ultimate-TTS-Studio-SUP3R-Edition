@@ -66,7 +66,7 @@ class CUDAGraphRunner(nn.Module):
         # Capture the graph
         self._graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self._graph, pool=memory_pool, stream=stream):
-            out_hidden_states, all_hidden_states, all_self_attns = self.model(
+            model_output = self.model(
                 hidden_states=hidden_states,
                 causal_mask=causal_mask,
                 position_ids=position_ids,
@@ -81,6 +81,14 @@ class CUDAGraphRunner(nn.Module):
                 is_decoding_audio_token=is_decoding_audio_token,
                 is_using_cuda_graph=is_using_cuda_graph,
             )
+            if len(model_output) == 3:
+                out_hidden_states, all_hidden_states, all_self_attns = model_output
+            elif len(model_output) == 2:
+                out_hidden_states, all_hidden_states = model_output
+                all_self_attns = None
+            else:
+                out_hidden_states = model_output[0] if isinstance(model_output, (tuple, list)) else model_output
+                all_hidden_states = all_self_attns = None
             # hidden_states_out = torch.ops._C.weak_ref_tensor(outputs[0])
             # del outputs
             gc.collect()

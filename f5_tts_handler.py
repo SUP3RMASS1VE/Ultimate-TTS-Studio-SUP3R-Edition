@@ -81,6 +81,9 @@ class F5TTSHandler:
         self.device = device
         self.models_dir = Path('F5-Models')
         self.models_dir.mkdir(parents=True, exist_ok=True)
+        # Isolated cache for third-party dependencies (Whisper)
+        self.cache_dir = Path('checkpoints') / 'f5' / 'cache'
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         self.loaded_models = {}
         self.current_model = None
@@ -89,6 +92,73 @@ class F5TTSHandler:
         
         # Try to import F5-TTS
         self.f5_tts_available = self._check_f5_tts_available()
+        # Ensure Whisper dependency available for pipelines used by F5 (local snapshot, HF not ModelScope)
+        try:
+            from huggingface_hub import snapshot_download
+            original_env = {
+                'TRANSFORMERS_OFFLINE': os.environ.get('TRANSFORMERS_OFFLINE'),
+                'HF_HUB_OFFLINE': os.environ.get('HF_HUB_OFFLINE'),
+                'HF_HOME': os.environ.get('HF_HOME'),
+                'TRANSFORMERS_CACHE': os.environ.get('TRANSFORMERS_CACHE'),
+                'HF_HUB_CACHE': os.environ.get('HF_HUB_CACHE'),
+                'HUGGINGFACE_HUB_CACHE': os.environ.get('HUGGINGFACE_HUB_CACHE')
+            }
+            try:
+                os.environ.pop('TRANSFORMERS_OFFLINE', None)
+                os.environ.pop('HF_HUB_OFFLINE', None)
+                os.environ['HF_HOME'] = str(self.cache_dir)
+                os.environ['TRANSFORMERS_CACHE'] = str(self.cache_dir)
+                os.environ['HF_HUB_CACHE'] = str(self.cache_dir)
+                os.environ['HUGGINGFACE_HUB_CACHE'] = str(self.cache_dir)
+                # Pre-fetch the Whisper model to avoid ModelScope fallback
+                self.whisper_repo = 'openai/whisper-large-v3-turbo'
+                self.whisper_local = snapshot_download(
+                    repo_id=self.whisper_repo,
+                    cache_dir=str(self.cache_dir),
+                    local_dir_use_symlinks=False
+                )
+            except Exception as _:
+                self.whisper_local = None
+            finally:
+                for k, v in original_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+        except Exception:
+            self.whisper_local = None
+        # Install redirect patches so any request for the HF id uses the local snapshot path
+        try:
+            self._install_whisper_redirect_patch()
+        except Exception:
+            pass
+
+    def _install_whisper_redirect_patch(self):
+        """Redirect HF id 'openai/whisper-large-v3-turbo' to a local snapshot path.
+        This avoids ModelScope wrappers by patching Transformers Auto classes directly.
+        """
+        if not self.whisper_local or not os.path.isdir(self.whisper_local):
+            return
+        try:
+            import transformers
+            from transformers import AutoConfig, AutoTokenizer, AutoModelForSpeechSeq2Seq
+            _target_id = 'openai/whisper-large-v3-turbo'
+            _local = self.whisper_local
+
+            def _redir_from_pretrained(orig):
+                def wrapper(pretrained_model_name_or_path, *args, **kwargs):
+                    if isinstance(pretrained_model_name_or_path, str) and pretrained_model_name_or_path.strip() == _target_id:
+                        pretrained_model_name_or_path = _local
+                        kwargs.setdefault('local_files_only', True)
+                    return orig(pretrained_model_name_or_path, *args, **kwargs)
+                return wrapper
+
+            # Patch the most used classes for Whisper pipelines
+            AutoConfig.from_pretrained = _redir_from_pretrained(AutoConfig.from_pretrained)
+            AutoTokenizer.from_pretrained = _redir_from_pretrained(AutoTokenizer.from_pretrained)
+            AutoModelForSpeechSeq2Seq.from_pretrained = _redir_from_pretrained(AutoModelForSpeechSeq2Seq.from_pretrained)
+        except Exception:
+            pass
         
     def _check_f5_tts_available(self):
         """Check if F5-TTS is installed"""
@@ -362,6 +432,13 @@ class F5TTSHandler:
                         break
                 
                 # Initialize F5TTS with model path
+                # Force Whisper to load from local snapshot if available
+                whisper_path_override = getattr(self, 'whisper_local', None)
+                if whisper_path_override and os.path.isdir(whisper_path_override):
+                    os.environ['HF_HOME'] = str(self.cache_dir)
+                    os.environ['TRANSFORMERS_CACHE'] = str(self.cache_dir)
+                    os.environ['HF_HUB_CACHE'] = str(self.cache_dir)
+                    os.environ['HUGGINGFACE_HUB_CACHE'] = str(self.cache_dir)
                 self.model = self.F5TTS(
                     model=model_id,
                     ckpt_file=str(model_file),

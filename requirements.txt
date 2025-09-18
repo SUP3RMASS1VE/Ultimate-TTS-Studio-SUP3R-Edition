@@ -44,7 +44,7 @@ silero-vad==5.1.2
 soundfile
 tensorboard>=2.14.1
 tiktoken>=0.8.0
-transformers==4.46.3
+transformers==4.51.3
 uvicorn>=0.30.0
 wandb>=0.15.11
 wheel
@@ -59,7 +59,7 @@ chardet>=5.0.0
 lxml>=4.9.0
 
 # index tts
-tokenizers==0.20.3
+tokenizers>=0.21,<0.22
 cn2an==0.5.22
 ffmpeg-python==0.2.0
 Cython==3.0.7
@@ -76,9 +76,14 @@ tqdm
 tn
 PyYAML
 deepspeed==0.16.5
+json5
+munch
+wetext
+safetensors
 
 # f5
 f5-tts
+
 
 # KittenTTS
 num2words
@@ -94,3 +99,14 @@ vector_quantize_pytorch
 click
 
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# VibeVoice dependencies
+llvmlite>=0.40.0
+ml-collections
+absl-py
+av
+aiortc
+hf-xet
+# IndexTTS2 Support (Optional)
+# For IndexTTS2 functionality, run: install_indextts2.bat
+# Or manually install: pip install -r indextts2_requirements.txt

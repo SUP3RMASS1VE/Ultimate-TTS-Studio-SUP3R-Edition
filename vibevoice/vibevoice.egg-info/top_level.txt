@@ -1,0 +1,5 @@
+Figures
+demo
+models
+venv
+vibevoice
