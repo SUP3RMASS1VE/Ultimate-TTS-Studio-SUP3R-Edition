@@ -66,6 +66,7 @@ echo call conda activate "%LOCAL_ENV_PATH%" >> temp_launch.bat
 echo if errorlevel 1 ( >> temp_launch.bat
 echo     echo [ERROR] Failed to activate environment! >> temp_launch.bat
 echo     pause >> temp_launch.bat
+echo     del "%%~f0" >> temp_launch.bat
 echo     exit /b 1 >> temp_launch.bat
 echo ) >> temp_launch.bat
 echo echo [INFO] Starting Ultimate TTS Studio... >> temp_launch.bat
@@ -74,13 +75,13 @@ echo echo [INFO] Your browser will open automatically in a few seconds... >> tem
 echo echo [INFO] Press Ctrl+C to stop the server >> temp_launch.bat
 echo echo. >> temp_launch.bat
 echo python launch.py >> temp_launch.bat
+echo del "%%~f0" >> temp_launch.bat
 
 REM Launch in conda prompt
 start "Ultimate TTS Studio" /D "%cd%" "%windir%\System32\cmd.exe" /K ""%CONDA_ROOT%\Scripts\activate.bat" "%CONDA_ROOT%" && temp_launch.bat"
 
-REM Wait a moment then clean up
+REM Wait a moment for the window to launch
 timeout /t 2 /nobreak >nul
-del temp_launch.bat
 
 echo [INFO] Ultimate TTS Studio is starting in a new window...
 echo [INFO] Waiting for the server to start before opening browser...
