@@ -101,8 +101,29 @@ if !errorlevel! neq 0 (
 echo [SUCCESS] pynini installed successfully!
 echo.
 
-REM Step 6: Install WeTextProcessing using UV
-echo [STEP 6/6] Installing WeTextProcessing using UV...
+REM Step 6: Install PyTorch GPU version (reinstall to ensure GPU support)
+echo [STEP 6/10] Installing/Reinstalling PyTorch with GPU support...
+echo [INFO] This will ensure PyTorch has CUDA support even if CPU version was installed via dependencies...
+echo [INFO] Using --no-deps to avoid upgrading other packages and causing conflicts...
+call python -m uv pip uninstall torch torchvision torchaudio
+call python -m uv pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128 --no-deps
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install PyTorch GPU!
+    echo [INFO] Falling back to CPU version...
+    call python -m uv pip install torch torchvision torchaudio --no-deps
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to install PyTorch CPU fallback!
+        pause
+        exit /b 1
+    )
+    echo [WARNING] PyTorch CPU version installed as fallback!
+) else (
+    echo [SUCCESS] PyTorch GPU version installed successfully!
+)
+echo.
+
+REM Step 7: Install WeTextProcessing using UV
+echo [STEP 7/10] Installing WeTextProcessing using UV...
 call python -m uv pip install WeTextProcessing --no-deps
 if !errorlevel! neq 0 (
     echo [ERROR] Failed to install WeTextProcessing!
@@ -110,6 +131,43 @@ if !errorlevel! neq 0 (
     exit /b 1
 )
 echo [SUCCESS] WeTextProcessing installed successfully!
+echo.
+
+REM Step 8: Install Triton for Windows
+echo [STEP 8/10] Installing Triton for Windows...
+echo [INFO] Installing Triton Windows version for enhanced GPU performance...
+call python -m uv pip install triton-windows==3.3.1.post19
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install Triton Windows!
+    echo [INFO] This may affect some model performance but installation can continue...
+) else (
+    echo [SUCCESS] Triton Windows installed successfully!
+)
+echo.
+
+REM Step 9: Install Flash Attention for Windows
+echo [STEP 9/10] Installing Flash Attention for Windows...
+echo [INFO] Installing Flash Attention wheel for Windows with CUDA 12.8...
+set "FLASH_ATTN_URL=https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4.post1+cu128torch2.7.0cxx11abiFALSE-cp310-cp310-win_amd64.whl"
+call python -m uv pip install "!FLASH_ATTN_URL!"
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install Flash Attention!
+    echo [INFO] This may affect some model performance but installation can continue...
+) else (
+    echo [SUCCESS] Flash Attention installed successfully!
+)
+echo.
+
+REM Step 10: Install ONNX Runtime GPU version
+echo [STEP 10/10] Installing ONNX Runtime GPU version...
+echo [INFO] Ensuring ONNX Runtime has GPU support...
+call python -m uv pip install --upgrade --force-reinstall --no-deps --no-cache-dir onnxruntime-gpu==1.22.0
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install ONNX Runtime GPU!
+    echo [INFO] This may affect some model performance but installation can continue...
+) else (
+    echo [SUCCESS] ONNX Runtime GPU installed successfully!
+)
 echo.
 
 echo ========================================
