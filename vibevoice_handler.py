@@ -314,7 +314,8 @@ class VibeVoiceHandler:
                         speaker_voices: List[str],
                         cfg_scale: float = 1.3,
                         seed: Optional[int] = None,
-                        output_folder: str = "outputs") -> Tuple[Optional[Tuple], str]:
+                        output_folder: str = "outputs",
+                        audio_format: str = "wav") -> Tuple[Optional[Tuple], str]:
         """Generate podcast audio using VibeVoice (non-streaming mode)"""
         print("\n" + "="*60)
         print("🎙️ VIBEVOICE PODCAST GENERATION STARTED")
@@ -407,33 +408,54 @@ class VibeVoiceHandler:
                     print(f"\n💾 Saving audio to file...")
                     os.makedirs(output_folder, exist_ok=True)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"vibevoice_podcast_{timestamp}.wav"
-                    filepath = os.path.join(output_folder, filename)
+                    filename_base = f"vibevoice_podcast_{timestamp}"
 
-                    # Save audio
-                    import soundfile as sf
-                    sample_rate, audio_data = final_audio
+                    # Import the save function from launch.py
+                    import sys
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    if current_dir not in sys.path:
+                        sys.path.insert(0, current_dir)
+                    
+                    try:
+                        from launch import save_audio_with_format
+                        
+                        sample_rate, audio_data = final_audio
 
-                    # Calculate audio duration
-                    duration = len(audio_data) / sample_rate
-                    file_size_mb = len(audio_data) * 4 / (1024 * 1024)  # Rough estimate for 32-bit float
+                        # Calculate audio duration
+                        duration = len(audio_data) / sample_rate
+                        file_size_mb = len(audio_data) * 4 / (1024 * 1024)  # Rough estimate for 32-bit float
 
-                    print(f"   📊 Audio info:")
-                    print(f"      🎵 Sample rate: {sample_rate} Hz")
-                    print(f"      ⏱️ Duration: {duration:.2f} seconds")
-                    print(f"      📏 Samples: {len(audio_data):,}")
-                    print(f"      💽 Estimated size: {file_size_mb:.1f} MB")
+                        print(f"   📊 Audio info:")
+                        print(f"      🎵 Sample rate: {sample_rate} Hz")
+                        print(f"      ⏱️ Duration: {duration:.2f} seconds")
+                        print(f"      📏 Samples: {len(audio_data):,}")
+                        print(f"      💽 Estimated size: {file_size_mb:.1f} MB")
+                        print(f"      🎵 Format: {audio_format.upper()}")
 
-                    sf.write(filepath, audio_data, sample_rate)
+                        # Use the format-aware save function
+                        filepath, filename = save_audio_with_format(
+                            audio_data, sample_rate, audio_format, output_folder, filename_base
+                        )
 
-                    # Get actual file size
-                    actual_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+                        # Get actual file size
+                        actual_size_mb = os.path.getsize(filepath) / (1024 * 1024)
 
-                    print(f"   ✅ Successfully saved: {filename}")
-                    print(f"   📁 Location: {filepath}")
-                    print(f"   💽 File size: {actual_size_mb:.1f} MB")
+                        print(f"   ✅ Successfully saved: {filename}")
+                        print(f"   📁 Location: {filepath}")
+                        print(f"   💽 File size: {actual_size_mb:.1f} MB")
 
-                    final_log += f"\n💾 Saved as: {filename}"
+                        final_log += f"\n💾 Saved as: {filename} ({audio_format.upper()})"
+                        
+                    except ImportError:
+                        # Fallback to WAV if save_audio_with_format is not available
+                        print(f"   ⚠️ Using fallback WAV saving...")
+                        import soundfile as sf
+                        sample_rate, audio_data = final_audio
+                        filename = f"{filename_base}.wav"
+                        filepath = os.path.join(output_folder, filename)
+                        sf.write(filepath, audio_data, sample_rate)
+                        final_log += f"\n💾 Saved as: {filename} (WAV fallback)"
+                        
                 except Exception as save_error:
                     print(f"   ❌ Error saving file: {save_error}")
                     final_log += f"\n⚠️ Could not save file: {save_error}"
@@ -466,7 +488,8 @@ def generate_vibevoice_podcast(num_speakers: int,
                               speaker_voices: List[str],
                               cfg_scale: float = 1.3,
                               seed: Optional[int] = None,
-                              output_folder: str = "outputs") -> Tuple[Optional[Tuple], str]:
+                              output_folder: str = "outputs",
+                              audio_format: str = "wav") -> Tuple[Optional[Tuple], str]:
     """Generate podcast using VibeVoice"""
     handler = get_vibevoice_handler()
     return handler.generate_podcast(
@@ -475,7 +498,8 @@ def generate_vibevoice_podcast(num_speakers: int,
         speaker_voices=speaker_voices,
         cfg_scale=cfg_scale,
         seed=seed,
-        output_folder=output_folder
+        output_folder=output_folder,
+        audio_format=audio_format
     )
 
 def init_vibevoice(model_path: str = "models/VibeVoice-1.5B") -> Tuple[bool, str]:

@@ -1627,25 +1627,63 @@ def save_audio_with_format(audio_data, sample_rate, output_format="wav", output_
     os.makedirs(output_folder, exist_ok=True)
     
     if output_format == "wav":
-        # Save directly as WAV using scipy
+        # Save directly as WAV using soundfile for better quality
         filename = f"{filename_base}.wav"
         filepath = os.path.join(output_folder, filename)
-        write(filepath, sample_rate, (audio_data * 32767).astype(np.int16))
+        
+        try:
+            import soundfile as sf
+            # Check if audio_data is already in the right range
+            if np.max(np.abs(audio_data)) <= 1.0:
+                # Audio is already normalized, save directly
+                sf.write(filepath, audio_data, sample_rate)
+            else:
+                # Audio needs normalization
+                normalized_audio = audio_data / np.max(np.abs(audio_data))
+                sf.write(filepath, normalized_audio, sample_rate)
+        except ImportError:
+            # Fallback to scipy if soundfile not available
+            if np.max(np.abs(audio_data)) <= 1.0:
+                # Audio is normalized, scale to int16 range
+                write(filepath, sample_rate, (audio_data * 32767).astype(np.int16))
+            else:
+                # Audio needs normalization first
+                normalized_audio = audio_data / np.max(np.abs(audio_data))
+                write(filepath, sample_rate, (normalized_audio * 32767).astype(np.int16))
+        
         return filepath, filename
     
     elif output_format == "mp3":
-        # Convert to MP3 using pydub
+        # Convert to MP3 using pydub with high quality settings
         try:
-            # First save as temporary WAV
+            import tempfile
+            import soundfile as sf
+            
+            # First save as temporary high-quality WAV using soundfile
             temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            write(temp_wav.name, sample_rate, (audio_data * 32767).astype(np.int16))
             temp_wav.close()
             
-            # Convert to MP3
+            # Normalize audio if needed and save as WAV
+            if np.max(np.abs(audio_data)) <= 1.0:
+                # Audio is already normalized
+                sf.write(temp_wav.name, audio_data, sample_rate)
+            else:
+                # Audio needs normalization
+                normalized_audio = audio_data / np.max(np.abs(audio_data))
+                sf.write(temp_wav.name, normalized_audio, sample_rate)
+            
+            # Convert to MP3 with high quality settings
             audio_segment = AudioSegment.from_wav(temp_wav.name)
             filename = f"{filename_base}.mp3"
             filepath = os.path.join(output_folder, filename)
-            audio_segment.export(filepath, format="mp3", bitrate="192k")
+            
+            # Export with high quality settings
+            audio_segment.export(
+                filepath, 
+                format="mp3", 
+                bitrate="320k",  # Higher bitrate for better quality
+                parameters=["-q:a", "0"]  # Highest quality setting for ffmpeg
+            )
             
             # Clean up temporary file
             os.unlink(temp_wav.name)
@@ -1654,11 +1692,17 @@ def save_audio_with_format(audio_data, sample_rate, output_format="wav", output_
             
         except Exception as e:
             print(f"Error converting to MP3: {e}")
-            # Fallback to WAV
+            # Fallback to WAV with proper normalization
             print("Falling back to WAV format...")
             filename = f"{filename_base}.wav"
             filepath = os.path.join(output_folder, filename)
-            write(filepath, sample_rate, (audio_data * 32767).astype(np.int16))
+            
+            if np.max(np.abs(audio_data)) <= 1.0:
+                write(filepath, sample_rate, (audio_data * 32767).astype(np.int16))
+            else:
+                normalized_audio = audio_data / np.max(np.abs(audio_data))
+                write(filepath, sample_rate, (normalized_audio * 32767).astype(np.int16))
+            
             return filepath, filename
     
     else:
@@ -6231,7 +6275,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     # Speaker voice selections
                                     with gr.Group():
                                         with gr.Row():
-                                            gr.Markdown("**🎭 Speaker Voice Selection**")
+                                            gr.Markdown("**🎭 Speaker Voice Selection**") 
                                             vibevoice_refresh_voices_btn = gr.Button(
                                                 "🔄 Refresh Voices",
                                                 variant="secondary",
@@ -6239,28 +6283,29 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                                 elem_classes=["fade-in"]
                                             )
                                         
-                                        vibevoice_speaker_1 = gr.Radio(
-                                            label="🎤 Speaker 1 Voice",
-                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
-                                            elem_classes=["fade-in"]
-                                        )
-                                        vibevoice_speaker_2 = gr.Radio(
-                                            label="🎤 Speaker 2 Voice",
-                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
-                                            elem_classes=["fade-in"]
-                                        )
-                                        vibevoice_speaker_3 = gr.Radio(
-                                            label="🎤 Speaker 3 Voice",
-                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
-                                            visible=False,
-                                            elem_classes=["fade-in"]
-                                        )
-                                        vibevoice_speaker_4 = gr.Radio(
-                                            label="🎤 Speaker 4 Voice",
-                                            choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
-                                            visible=False,
-                                            elem_classes=["fade-in"]
-                                        )
+                                        with gr.Accordion("🎤 Speaker 1 Voice", open=False, elem_classes=["fade-in"]) as vibevoice_speaker_1_accordion:
+                                            vibevoice_speaker_1 = gr.Radio(
+                                                choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                                elem_classes=["fade-in"]
+                                            )
+                                        
+                                        with gr.Accordion("🎤 Speaker 2 Voice", open=False, elem_classes=["fade-in"]) as vibevoice_speaker_2_accordion:
+                                            vibevoice_speaker_2 = gr.Radio(
+                                                choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                                elem_classes=["fade-in"]
+                                            )
+                                        
+                                        with gr.Accordion("🎤 Speaker 3 Voice", open=False, visible=False, elem_classes=["fade-in"]) as vibevoice_speaker_3_accordion:
+                                            vibevoice_speaker_3 = gr.Radio(
+                                                choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                                elem_classes=["fade-in"]
+                                            )
+                                        
+                                        with gr.Accordion("🎤 Speaker 4 Voice", open=False, visible=False, elem_classes=["fade-in"]) as vibevoice_speaker_4_accordion:
+                                            vibevoice_speaker_4 = gr.Radio(
+                                                choices=get_vibevoice_voices() if VIBEVOICE_AVAILABLE else [],
+                                                elem_classes=["fade-in"]
+                                            )
                                 
                                 with gr.Column(scale=1):
                                     # VibeVoice settings
@@ -6281,6 +6326,14 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                         value=44,
                                         precision=0,
                                         info="Leave empty for random generation",
+                                        elem_classes=["fade-in"]
+                                    )
+                                    
+                                    vibevoice_audio_format = gr.Radio(
+                                        choices=[("WAV", "wav"), ("MP3", "mp3")],
+                                        value="wav",
+                                        label="🎵 Audio Format",
+                                        info="Choose output audio format",
                                         elem_classes=["fade-in"]
                                     )
                                     
@@ -6420,6 +6473,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                             vibevoice_speaker_4 = gr.Radio(visible=False, choices=[])
                             vibevoice_cfg_scale = gr.Slider(visible=False, value=1.3)
                             vibevoice_seed = gr.Number(visible=False)
+                            vibevoice_audio_format = gr.Radio(visible=False, value="wav")
                             vibevoice_model_status = gr.Markdown(visible=False)
                             vibevoice_model_select = gr.Radio(visible=False, choices=[])
                             vibevoice_download_btn = gr.Button(visible=False)
@@ -8415,16 +8469,16 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
             # Update speaker dropdowns based on number of speakers
             def update_speaker_visibility(num_speakers):
                 return [
-                    gr.update(visible=True),  # Speaker 1 always visible
-                    gr.update(visible=num_speakers >= 2),  # Speaker 2 visible for 2+ speakers
-                    gr.update(visible=num_speakers >= 3),  # Speaker 3 visible for 3+ speakers
-                    gr.update(visible=num_speakers >= 4)   # Speaker 4 visible for 4 speakers
+                    gr.update(visible=True),  # Speaker 1 accordion always visible
+                    gr.update(visible=num_speakers >= 2),  # Speaker 2 accordion visible for 2+ speakers
+                    gr.update(visible=num_speakers >= 3),  # Speaker 3 accordion visible for 3+ speakers
+                    gr.update(visible=num_speakers >= 4)   # Speaker 4 accordion visible for 4 speakers
                 ]
             
             vibevoice_num_speakers.change(
                 fn=update_speaker_visibility,
                 inputs=[vibevoice_num_speakers],
-                outputs=[vibevoice_speaker_1, vibevoice_speaker_2, vibevoice_speaker_3, vibevoice_speaker_4]
+                outputs=[vibevoice_speaker_1_accordion, vibevoice_speaker_2_accordion, vibevoice_speaker_3_accordion, vibevoice_speaker_4_accordion]
             )
             
             # Model management
@@ -8540,7 +8594,7 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
             )
             
             # Generate podcast
-            def handle_vibevoice_generation(num_speakers, script, speaker_1, speaker_2, speaker_3, speaker_4, cfg_scale, seed):
+            def handle_vibevoice_generation(num_speakers, script, speaker_1, speaker_2, speaker_3, speaker_4, cfg_scale, seed, audio_format):
                 if not VIBEVOICE_AVAILABLE:
                     return None, "❌ VibeVoice not available"
                 
@@ -8554,7 +8608,8 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     speaker_voices=speaker_voices,
                     cfg_scale=cfg_scale,
                     seed=int(seed) if seed is not None else None,
-                    output_folder="outputs"
+                    output_folder="outputs",
+                    audio_format=audio_format
                 )
                 
                 return audio_result, status
@@ -8563,7 +8618,7 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 fn=handle_vibevoice_generation,
                 inputs=[vibevoice_num_speakers, vibevoice_script, vibevoice_speaker_1, 
                        vibevoice_speaker_2, vibevoice_speaker_3, vibevoice_speaker_4,
-                       vibevoice_cfg_scale, vibevoice_seed],
+                       vibevoice_cfg_scale, vibevoice_seed, vibevoice_audio_format],
                 outputs=[vibevoice_output, vibevoice_status]
             )
     
