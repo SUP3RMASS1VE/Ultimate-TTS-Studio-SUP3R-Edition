@@ -308,33 +308,33 @@ class VibeVoiceHandler:
         except Exception as e:
             return f"❌ Error processing audio file: {str(e)}"
     
-    def generate_podcast(self, 
+    def generate_podcast(self,
                         num_speakers: int,
                         script: str,
                         speaker_voices: List[str],
                         cfg_scale: float = 1.3,
                         seed: Optional[int] = None,
                         output_folder: str = "outputs") -> Tuple[Optional[Tuple], str]:
-        """Generate podcast audio using VibeVoice"""
+        """Generate podcast audio using VibeVoice (non-streaming mode)"""
         print("\n" + "="*60)
         print("🎙️ VIBEVOICE PODCAST GENERATION STARTED")
         print("="*60)
-        
+
         if not self.demo:
             print("❌ Demo not initialized")
             return None, "❌ Demo not initialized"
-        
+
         if not self.model_loaded:
             print("❌ No model loaded")
             return None, "❌ No model loaded"
-        
+
         try:
             # Ensure we have enough speakers
             if len(speaker_voices) < num_speakers:
                 error_msg = f"❌ Need {num_speakers} speakers, only {len(speaker_voices)} provided"
                 print(error_msg)
                 return None, error_msg
-            
+
             # Print generation parameters
             print(f"📊 Generation Parameters:")
             print(f"   🎤 Number of speakers: {num_speakers}")
@@ -343,17 +343,16 @@ class VibeVoiceHandler:
             print(f"   🎭 Speakers: {', '.join(speaker_voices[:num_speakers])}")
             print(f"   📝 Script length: {len(script)} characters")
             print(f"   📁 Output folder: {output_folder}")
-            
-            # Use the demo's streaming generation method
-            # We'll collect all chunks and return the final result
-            final_audio = None
-            final_log = ""
-            chunk_count = 0
-            
+
             print(f"\n🔄 Starting VibeVoice generation...")
             print(f"⏳ This may take several minutes depending on script length...")
-            
-            # Call the streaming generator and collect results
+
+            # Collect all results from streaming generator
+            final_audio = None
+            final_log = ""
+            complete_audio = None
+
+            # Process all streaming results to get the final complete audio
             for result in self.demo.generate_podcast_streaming(
                 num_speakers=num_speakers,
                 script=script,
@@ -364,54 +363,44 @@ class VibeVoiceHandler:
                 cfg_scale=cfg_scale,
                 seed=seed
             ):
-                chunk_count += 1
-                
                 # Handle different return formats from the streaming generator
                 if isinstance(result, tuple):
                     if len(result) == 4:
                         # Format: streaming_audio, complete_audio, log, ui_update
                         streaming_audio, complete_audio, log_result, _ = result
-                        # Use complete_audio if available, otherwise streaming_audio
-                        if complete_audio is not None:
-                            final_audio = complete_audio
-                            print(f"✅ Received complete audio (chunk {chunk_count})")
-                        elif streaming_audio is not None:
-                            final_audio = streaming_audio
-                            if chunk_count % 5 == 0:  # Print every 5th streaming chunk to avoid spam
-                                print(f"🎵 Streaming chunk {chunk_count} received...")
                         final_log = log_result
+                        if complete_audio is not None:
+                            break  # We got the final complete audio, exit the loop
                     elif len(result) == 3:
                         # Format: audio, log, ui_update
                         audio_result, log_result, _ = result
                         if audio_result is not None:
-                            final_audio = audio_result
-                            print(f"🎵 Audio chunk {chunk_count} received...")
+                            complete_audio = audio_result
                         final_log = log_result
                     elif len(result) == 2:
                         # Format: audio, log
                         audio_result, log_result = result
                         if audio_result is not None:
-                            final_audio = audio_result
-                            print(f"🎵 Audio chunk {chunk_count} received...")
+                            complete_audio = audio_result
                         final_log = log_result
                 else:
                     # Single value, assume it's audio
                     if result is not None:
-                        final_audio = result
+                        complete_audio = result
                         final_log = "Generated audio"
-                        print(f"🎵 Audio received (chunk {chunk_count})")
-                
-                # Print status updates from the log
-                if final_log and chunk_count % 3 == 0:  # Print every 3rd log update
-                    # Extract just the last line of the log for terminal
-                    log_lines = final_log.strip().split('\n')
-                    if log_lines:
-                        last_line = log_lines[-1].strip()
-                        if last_line and not last_line.startswith('🎙️'):
-                            print(f"📊 Status: {last_line}")
-            
-            print(f"\n🎉 Generation completed! Processed {chunk_count} chunks.")
-            
+
+            # Use complete audio if available, otherwise fall back to streaming audio
+            if complete_audio is not None:
+                final_audio = complete_audio
+                print(f"✅ Complete audio received")
+            elif final_audio is not None:
+                print(f"✅ Using final streaming audio")
+            else:
+                print(f"⚠️ No audio generated")
+                return None, "❌ No audio was generated"
+
+            print(f"🎉 Generation completed!")
+
             # Save the audio to outputs folder
             if final_audio is not None:
                 try:
@@ -420,43 +409,43 @@ class VibeVoiceHandler:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"vibevoice_podcast_{timestamp}.wav"
                     filepath = os.path.join(output_folder, filename)
-                    
+
                     # Save audio
                     import soundfile as sf
                     sample_rate, audio_data = final_audio
-                    
+
                     # Calculate audio duration
                     duration = len(audio_data) / sample_rate
                     file_size_mb = len(audio_data) * 4 / (1024 * 1024)  # Rough estimate for 32-bit float
-                    
+
                     print(f"   📊 Audio info:")
                     print(f"      🎵 Sample rate: {sample_rate} Hz")
                     print(f"      ⏱️ Duration: {duration:.2f} seconds")
                     print(f"      📏 Samples: {len(audio_data):,}")
                     print(f"      💽 Estimated size: {file_size_mb:.1f} MB")
-                    
+
                     sf.write(filepath, audio_data, sample_rate)
-                    
+
                     # Get actual file size
                     actual_size_mb = os.path.getsize(filepath) / (1024 * 1024)
-                    
+
                     print(f"   ✅ Successfully saved: {filename}")
                     print(f"   📁 Location: {filepath}")
                     print(f"   💽 File size: {actual_size_mb:.1f} MB")
-                    
+
                     final_log += f"\n💾 Saved as: {filename}"
                 except Exception as save_error:
                     print(f"   ❌ Error saving file: {save_error}")
                     final_log += f"\n⚠️ Could not save file: {save_error}"
             else:
                 print(f"\n⚠️ No audio generated to save")
-            
+
             print("\n" + "="*60)
             print("🎉 VIBEVOICE PODCAST GENERATION COMPLETED")
             print("="*60)
-            
+
             return final_audio, final_log
-            
+
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()

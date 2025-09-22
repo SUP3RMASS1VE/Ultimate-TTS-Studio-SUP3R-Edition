@@ -596,6 +596,22 @@ class IndexTTS2:
                                                                  ylens=target_lengths,
                                                                  n_quantizers=3,
                                                                  f0=None)[0]
+                    
+                    # Fix tensor dimension mismatch for long text
+                    # Ensure prompt_condition and cond have compatible dimensions
+                    if prompt_condition.shape[0] != cond.shape[0]:
+                        # Adjust batch dimension if needed
+                        if prompt_condition.shape[0] == 1 and cond.shape[0] > 1:
+                            prompt_condition = prompt_condition.repeat(cond.shape[0], 1, 1)
+                        elif cond.shape[0] == 1 and prompt_condition.shape[0] > 1:
+                            cond = cond.repeat(prompt_condition.shape[0], 1, 1)
+                    
+                    # Ensure feature dimensions match (dim=2)
+                    if prompt_condition.shape[2] != cond.shape[2]:
+                        min_feat_dim = min(prompt_condition.shape[2], cond.shape[2])
+                        prompt_condition = prompt_condition[:, :, :min_feat_dim]
+                        cond = cond[:, :, :min_feat_dim]
+                    
                     cat_condition = torch.cat([prompt_condition, cond], dim=1)
                     vc_target = self.s2mel.models['cfm'].inference(cat_condition,
                                                                    torch.LongTensor([cat_condition.size(1)]).to(

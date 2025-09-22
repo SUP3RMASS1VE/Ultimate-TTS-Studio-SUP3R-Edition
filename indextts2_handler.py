@@ -524,6 +524,66 @@ class IndexTTS2Handler:
             print(f"   Text: {text[:50]}...")
             print(f"   Emotion mode: {emotion_mode}")
             
+            # Preprocess long text to avoid tensor dimension mismatch
+            # Split very long text into smaller chunks to prevent issues
+            if len(text) > 500:  # If text is longer than 500 characters
+                print(f"   ⚠️ Long text detected ({len(text)} chars), splitting into chunks...")
+                # Split by sentences first, then by length if needed
+                import re
+                sentences = re.split(r'[.!?]+', text)
+                processed_chunks = []
+                current_chunk = ""
+                
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                    
+                    # If adding this sentence would make chunk too long, save current chunk
+                    if len(current_chunk) + len(sentence) > 300 and current_chunk:
+                        processed_chunks.append(current_chunk.strip())
+                        current_chunk = sentence
+                    else:
+                        current_chunk += (" " + sentence if current_chunk else sentence)
+                
+                # Add the last chunk
+                if current_chunk.strip():
+                    processed_chunks.append(current_chunk.strip())
+                
+                # If we have multiple chunks, process them separately and concatenate
+                if len(processed_chunks) > 1:
+                    print(f"   📝 Processing {len(processed_chunks)} text chunks...")
+                    chunk_audios = []
+                    
+                    for i, chunk in enumerate(processed_chunks):
+                        print(f"   🔄 Processing chunk {i+1}/{len(processed_chunks)}: {chunk[:30]}...")
+                        
+                        # Recursive call with shorter text
+                        chunk_audio, chunk_message = self.generate_speech(
+                            chunk, reference_audio, emotion_mode, emotion_audio,
+                            emotion_vectors, emotion_description, temperature, top_p, top_k,
+                            repetition_penalty, min(max_mel_tokens, 800), seed, use_random, emo_alpha
+                        )
+                        
+                        if chunk_audio is None:
+                            return None, f"❌ Error processing chunk {i+1}: {chunk_message}"
+                        
+                        chunk_audios.append(chunk_audio)
+                    
+                    # Concatenate all chunk audios with small pauses
+                    print(f"   🎵 Combining {len(chunk_audios)} audio chunks...")
+                    pause_samples = int(0.3 * self.sample_rate)  # 0.3 second pause
+                    pause_audio = np.zeros(pause_samples)
+                    
+                    combined_audio = chunk_audios[0]
+                    for chunk_audio in chunk_audios[1:]:
+                        combined_audio = np.concatenate([combined_audio, pause_audio, chunk_audio])
+                    
+                    return combined_audio, "✅ Long text processed successfully in chunks"
+                else:
+                    # Single chunk, continue with normal processing
+                    text = processed_chunks[0]
+            
             # Set random seed if provided
             if seed is not None:
                 torch.manual_seed(seed)
@@ -559,6 +619,9 @@ class IndexTTS2Handler:
                 emo_text = emotion_description
             
             # Generate speech using the actual IndexTTS2 API
+            # Use smaller max_text_tokens_per_segment to prevent tensor dimension issues
+            max_text_tokens_per_segment = min(80, max_mel_tokens // 20) if len(text) > 200 else 120
+            
             result = self.model.infer(
                 spk_audio_prompt=reference_audio,
                 text=text,
@@ -569,6 +632,7 @@ class IndexTTS2Handler:
                 use_emo_text=use_emo_text,
                 emo_text=emo_text,
                 use_random=use_random,
+                max_text_tokens_per_segment=max_text_tokens_per_segment,
                 **generation_kwargs
             )
             
@@ -606,8 +670,20 @@ class IndexTTS2Handler:
             
         except Exception as e:
             import traceback
+            error_msg = str(e)
+            
+            # Provide specific guidance for common tensor dimension errors
+            if "Sizes of tensors must match" in error_msg:
+                print("🔍 Tensor dimension mismatch detected - this is likely due to long text processing")
+                print("💡 Try reducing max_mel_tokens or splitting your text into shorter segments")
+                error_msg = f"Tensor dimension mismatch (likely due to long text): {error_msg}"
+            elif "Expected size" in error_msg and "but got size" in error_msg:
+                print("🔍 Tensor size mismatch detected")
+                print("💡 This may be resolved by using shorter text segments")
+                error_msg = f"Tensor size mismatch: {error_msg}"
+            
             traceback.print_exc()
-            return None, f"❌ Error generating speech: {str(e)}"
+            return None, f"❌ Error generating speech: {error_msg}"
     
     def get_model_info(self):
         """Get information about the loaded model"""

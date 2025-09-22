@@ -1448,6 +1448,18 @@ def generate_conversation_audio_indextts2(
         # Convert to numpy array
         final_conversation_audio = np.array(final_conversation_audio, dtype=np.float32)
         
+        # Save the conversation audio to outputs folder
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_base = f"conversation_{selected_engine.lower().replace(' ', '_')}_{timestamp}"
+            filepath, filename = save_audio_with_format(
+                final_conversation_audio, sample_rate, audio_format, output_folder, filename_base
+            )
+            print(f"💾 Conversation saved as: {filename}")
+        except Exception as save_error:
+            print(f"Warning: Could not save conversation file: {save_error}")
+            filename = "conversation_audio"
+        
         # Create conversation summary
         total_duration = len(final_conversation_audio) / sample_rate
         unique_speakers = len(set([info['speaker'] for info in conversation_info]))
@@ -1459,7 +1471,8 @@ def generate_conversation_audio_indextts2(
             'speakers': list(set([info['speaker'] for info in conversation_info])),
             'conversation_info': conversation_info,
             'engine_used': selected_engine,
-            'emotion_controls_used': True
+            'emotion_controls_used': True,
+            'saved_file': filename
         }
         
         print(f"✅ IndexTTS2 conversation generated: {len(conversation)} lines, {unique_speakers} speakers, {total_duration:.1f}s")
