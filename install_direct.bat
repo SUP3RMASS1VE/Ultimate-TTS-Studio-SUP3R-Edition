@@ -159,7 +159,7 @@ if !errorlevel! neq 0 (
 echo.
 
 REM Step 10: Install ONNX Runtime GPU version
-echo [STEP 10/10] Installing ONNX Runtime GPU version...
+echo [STEP 10/11] Installing ONNX Runtime GPU version...
 echo [INFO] Ensuring ONNX Runtime has GPU support...
 call python -m uv pip install --upgrade --force-reinstall --no-deps --no-cache-dir onnxruntime-gpu==1.22.0
 if !errorlevel! neq 0 (
@@ -167,6 +167,18 @@ if !errorlevel! neq 0 (
     echo [INFO] This may affect some model performance but installation can continue...
 ) else (
     echo [SUCCESS] ONNX Runtime GPU installed successfully!
+)
+echo.
+
+REM Step 11: Install voxcpm and openai-whisper
+echo [STEP 11/11] Installing voxcpm and openai-whisper...
+echo [INFO] Installing additional audio processing packages...
+call python -m uv pip install voxcpm openai-whisper --no-deps
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to install voxcpm and openai-whisper!
+    echo [INFO] This may affect some functionality but installation can continue...
+) else (
+    echo [SUCCESS] voxcpm and openai-whisper installed successfully!
 )
 echo.
 
