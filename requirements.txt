@@ -2,7 +2,7 @@ accelerate
 cachetools
 onnxruntime-gpu
 conformer==0.3.2
-datasets==2.18.0
+datasets==3.6.0
 descript-audio-codec
 descript-audiotools
 diffusers==0.29.0
@@ -23,7 +23,7 @@ lightning>=2.1.0
 loguru>=0.6.0
 loralib>=0.1.2
 misaki
-modelscope==1.17.1
+modelscope>=1.22.0
 natsort>=8.4.0
 numpy==1.26.0
 omegaconf==2.3.0
@@ -110,4 +110,5 @@ hf-xet
 
 # VoxCPM dependencies
 openai-whisper
-
+simplejson
+sortedcontainers
