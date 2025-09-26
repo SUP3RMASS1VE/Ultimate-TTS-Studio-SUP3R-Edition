@@ -477,6 +477,61 @@ class IndexTTS2Handler:
             print(f"❌ Error preprocessing audio: {e}")
             return None, None
     
+    def _preprocess_text_for_tensor_safety(self, text: str) -> str:
+        """Preprocess text to avoid tensor dimension mismatches in IndexTTS2"""
+        import re
+        
+        # Remove excessive punctuation that might cause issues
+        text = re.sub(r'[.]{3,}', '...', text)  # Limit ellipsis
+        text = re.sub(r'[!]{2,}', '!', text)    # Limit exclamation marks
+        text = re.sub(r'[?]{2,}', '?', text)    # Limit question marks
+        
+        # Clean up excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        # Remove or replace problematic character sequences
+        text = re.sub(r'[^\w\s.,!?;:\'"()-]', '', text)  # Keep only safe characters
+        
+        # Ensure text doesn't end abruptly without punctuation
+        if text and text[-1] not in '.!?':
+            text += '.'
+        
+        # Limit very long sentences that might cause tensor issues
+        sentences = re.split(r'([.!?]+)', text)
+        processed_sentences = []
+        
+        for i in range(0, len(sentences), 2):
+            if i < len(sentences):
+                sentence = sentences[i].strip()
+                punctuation = sentences[i + 1] if i + 1 < len(sentences) else '.'
+                
+                # If sentence is too long, split it at commas or conjunctions
+                if len(sentence) > 150:
+                    # Split at commas, semicolons, or conjunctions
+                    parts = re.split(r'(,|;|\s+and\s+|\s+but\s+|\s+or\s+)', sentence)
+                    current_part = ""
+                    
+                    for j, part in enumerate(parts):
+                        if part.strip() in [',', ';', 'and', 'but', 'or']:
+                            current_part += part
+                            if len(current_part) > 80:  # Split here
+                                processed_sentences.append(current_part.strip() + '.')
+                                current_part = ""
+                        else:
+                            if len(current_part + part) > 120 and current_part:
+                                processed_sentences.append(current_part.strip() + '.')
+                                current_part = part
+                            else:
+                                current_part += part
+                    
+                    if current_part.strip():
+                        processed_sentences.append(current_part.strip() + punctuation)
+                else:
+                    processed_sentences.append(sentence + punctuation)
+        
+        return ' '.join(processed_sentences)
+    
     def generate_speech(
         self,
         text: str,
@@ -618,23 +673,149 @@ class IndexTTS2Handler:
                 use_emo_text = True
                 emo_text = emotion_description
             
-            # Generate speech using the actual IndexTTS2 API
+            # Preprocess text to avoid tensor dimension issues
+            # Clean up text that might cause tensor mismatches
+            original_text = text
+            text = self._preprocess_text_for_tensor_safety(text)
+            if text != original_text:
+                print(f"🔧 Text preprocessed to avoid tensor issues")
+            
+            # Generate speech using the actual IndexTTS2 API with retry logic for tensor dimension issues
             # Use smaller max_text_tokens_per_segment to prevent tensor dimension issues
             max_text_tokens_per_segment = min(80, max_mel_tokens // 20) if len(text) > 200 else 120
             
-            result = self.model.infer(
-                spk_audio_prompt=reference_audio,
-                text=text,
-                output_path=None,  # Return audio data instead of saving
-                emo_audio_prompt=emo_audio_prompt,
-                emo_alpha=emo_alpha,
-                emo_vector=emo_vector,
-                use_emo_text=use_emo_text,
-                emo_text=emo_text,
-                use_random=use_random,
-                max_text_tokens_per_segment=max_text_tokens_per_segment,
-                **generation_kwargs
-            )
+            # Implement retry logic with progressively smaller parameters
+            max_retries = 3
+            retry_count = 0
+            result = None
+            
+            while retry_count < max_retries and result is None:
+                try:
+                    # Adjust parameters based on retry count
+                    if retry_count > 0:
+                        print(f"   🔄 Tensor dimension mismatch (attempt {retry_count}/{max_retries})")
+                        # Progressively reduce parameters to avoid tensor issues
+                        max_text_tokens_per_segment = max(20, max_text_tokens_per_segment // 2)
+                        generation_kwargs['max_mel_tokens'] = max(300, generation_kwargs['max_mel_tokens'] // 2)
+                        print(f"   🔧 Retrying with max_text_tokens_per_segment={max_text_tokens_per_segment}, max_mel_tokens={generation_kwargs['max_mel_tokens']}")
+                    
+                    result = self.model.infer(
+                        spk_audio_prompt=reference_audio,
+                        text=text,
+                        output_path=None,  # Return audio data instead of saving
+                        emo_audio_prompt=emo_audio_prompt,
+                        emo_alpha=emo_alpha,
+                        emo_vector=emo_vector,
+                        use_emo_text=use_emo_text,
+                        emo_text=emo_text,
+                        use_random=use_random,
+                        max_text_tokens_per_segment=max_text_tokens_per_segment,
+                        **generation_kwargs
+                    )
+                    
+                except Exception as retry_error:
+                    retry_error_msg = str(retry_error)
+                    
+                    # Check if this is a tensor dimension mismatch error
+                    if ("Sizes of tensors must match" in retry_error_msg or 
+                        "Expected size" in retry_error_msg or
+                        "dimension" in retry_error_msg.lower()):
+                        
+                        retry_count += 1
+                        if retry_count >= max_retries:
+                            # Final attempt: force text chunking with very small segments
+                            print(f"   🔄 Final attempt: forcing text chunking...")
+                            try:
+                                # Split text into very small chunks and process separately
+                                words = text.split()
+                                chunk_size = max(5, len(words) // 4)  # Very small chunks
+                                text_chunks = []
+                                
+                                for i in range(0, len(words), chunk_size):
+                                    chunk = " ".join(words[i:i + chunk_size])
+                                    text_chunks.append(chunk)
+                                
+                                if len(text_chunks) > 1:
+                                    print(f"   📝 Processing {len(text_chunks)} micro-chunks...")
+                                    chunk_audios = []
+                                    
+                                    for j, chunk in enumerate(text_chunks):
+                                        print(f"   🔄 Micro-chunk {j+1}/{len(text_chunks)}: {chunk[:20]}...")
+                                        
+                                        chunk_result = self.model.infer(
+                                            spk_audio_prompt=reference_audio,
+                                            text=chunk,
+                                            output_path=None,
+                                            emo_audio_prompt=emo_audio_prompt,
+                                            emo_alpha=emo_alpha,
+                                            emo_vector=emo_vector,
+                                            use_emo_text=use_emo_text,
+                                            emo_text=emo_text,
+                                            use_random=use_random,
+                                            max_text_tokens_per_segment=20,
+                                            max_mel_tokens=300
+                                        )
+                                        
+                                        if chunk_result is not None:
+                                            if isinstance(chunk_result, tuple) and len(chunk_result) == 2:
+                                                _, chunk_audio = chunk_result
+                                                if isinstance(chunk_audio, torch.Tensor):
+                                                    chunk_audio = chunk_audio.cpu().numpy()
+                                                
+                                                # Ensure chunk_audio is 1D
+                                                if chunk_audio.ndim == 2:
+                                                    if chunk_audio.shape[0] == 1:
+                                                        chunk_audio = chunk_audio.flatten()
+                                                    elif chunk_audio.shape[1] == 1:
+                                                        chunk_audio = chunk_audio.flatten()
+                                                    else:
+                                                        # Take first channel if stereo
+                                                        chunk_audio = chunk_audio[0] if chunk_audio.shape[0] < chunk_audio.shape[1] else chunk_audio[:, 0]
+                                                
+                                                chunk_audios.append(chunk_audio)
+                                    
+                                    if chunk_audios:
+                                        try:
+                                            # Ensure all chunks are 1D arrays before combining
+                                            normalized_chunks = []
+                                            for i, chunk_audio in enumerate(chunk_audios):
+                                                if chunk_audio.ndim > 1:
+                                                    chunk_audio = chunk_audio.flatten()
+                                                
+                                                # Ensure it's a valid audio array
+                                                if len(chunk_audio) == 0:
+                                                    print(f"   ⚠️ Skipping empty chunk {i+1}")
+                                                    continue
+                                                
+                                                normalized_chunks.append(chunk_audio)
+                                            
+                                            if normalized_chunks:
+                                                # Combine chunks with small pauses
+                                                pause_samples = int(0.1 * self.sample_rate)
+                                                pause_audio = np.zeros(pause_samples)
+                                                
+                                                combined_audio = normalized_chunks[0]
+                                                for chunk_audio in normalized_chunks[1:]:
+                                                    combined_audio = np.concatenate([combined_audio, pause_audio, chunk_audio])
+                                                
+                                                print(f"   ✅ Successfully combined {len(normalized_chunks)} micro-chunks")
+                                                result = (self.sample_rate, combined_audio)
+                                                break
+                                            else:
+                                                print(f"   ❌ No valid chunks to combine")
+                                        
+                                        except Exception as combine_error:
+                                            print(f"   ❌ Error combining chunks: {combine_error}")
+                                            # Continue to raise the original error
+                                
+                            except Exception as chunk_error:
+                                print(f"   ❌ Chunking also failed: {chunk_error}")
+                                raise retry_error  # Re-raise original error
+                        else:
+                            continue  # Try again with smaller parameters
+                    else:
+                        # Not a tensor dimension error, re-raise immediately
+                        raise retry_error
             
             if result is None:
                 return None, "❌ Failed to generate audio"
@@ -647,15 +828,24 @@ class IndexTTS2Handler:
                 if isinstance(audio_data, torch.Tensor):
                     audio_data = audio_data.cpu().numpy()
                 
-                # Handle different audio data formats
+                # Handle different audio data formats more robustly
                 if audio_data.ndim == 2:
                     # If stereo or transposed, take first channel or transpose
                     if audio_data.shape[0] == 2:
                         audio_data = audio_data[0]  # Take first channel
                     elif audio_data.shape[1] == 1:
                         audio_data = audio_data.flatten()  # Flatten single channel
+                    elif audio_data.shape[0] == 1:
+                        audio_data = audio_data.flatten()  # Flatten single channel
                     else:
-                        audio_data = audio_data.T.flatten()  # Transpose and flatten
+                        # Choose the dimension that makes more sense for audio
+                        if audio_data.shape[0] < audio_data.shape[1]:
+                            audio_data = audio_data[0]  # Take first row
+                        else:
+                            audio_data = audio_data[:, 0]  # Take first column
+                elif audio_data.ndim > 2:
+                    # Handle higher dimensional arrays by flattening
+                    audio_data = audio_data.flatten()
                 
                 # Normalize audio to prevent clipping
                 if len(audio_data) > 0:

@@ -1358,7 +1358,17 @@ def generate_conversation_audio_indextts2(
                 continue
             
             # Generate audio using IndexTTS2 with emotion controls
+            # Use conservative parameters to avoid tensor dimension issues
             try:
+                # Adjust max_mel_tokens based on text length to prevent tensor issues
+                text_length = len(text)
+                if text_length > 300:
+                    max_mel_tokens = 800  # Smaller for long text
+                elif text_length > 150:
+                    max_mel_tokens = 1000  # Medium for medium text
+                else:
+                    max_mel_tokens = 1200  # Larger for short text
+                
                 result = generate_indextts2_tts(
                     text,
                     ref_audio,
@@ -1370,7 +1380,7 @@ def generate_conversation_audio_indextts2(
                     0.9,   # top_p
                     50,    # top_k
                     1.1,   # repetition_penalty
-                    1500,  # max_mel_tokens
+                    max_mel_tokens,  # Dynamic max_mel_tokens
                     None,  # seed
                     True,  # use_random
                     1.0,   # emo_alpha
@@ -1381,7 +1391,42 @@ def generate_conversation_audio_indextts2(
                 
                 if result[0] is None:
                     print(f"❌ Failed to generate audio for {speaker}: {result[1]}")
-                    continue
+                    
+                    # Try with even more conservative settings as fallback
+                    if "tensor" in result[1].lower() or "dimension" in result[1].lower():
+                        print(f"   🔄 Attempting fallback with minimal parameters...")
+                        try:
+                            fallback_result = generate_indextts2_tts(
+                                text[:100] + "..." if len(text) > 100 else text,  # Truncate if too long
+                                ref_audio,
+                                'audio_reference',  # Use simplest emotion mode
+                                None,  # No emotion audio
+                                {},    # No emotion vectors
+                                '',    # No emotion description
+                                0.7,   # Lower temperature
+                                0.8,   # Lower top_p
+                                30,    # Lower top_k
+                                1.0,   # No repetition penalty
+                                300,   # Very small max_mel_tokens
+                                None,  # seed
+                                False, # No random sampling
+                                0.5,   # Lower emo_alpha
+                                None,  # No effects
+                                audio_format,
+                                skip_file_saving=True
+                            )
+                            
+                            if fallback_result[0] is not None:
+                                print(f"   ✅ Fallback successful for {speaker}")
+                                result = fallback_result
+                            else:
+                                print(f"   ❌ Fallback also failed for {speaker}")
+                                continue
+                        except Exception as fallback_error:
+                            print(f"   ❌ Fallback error for {speaker}: {fallback_error}")
+                            continue
+                    else:
+                        continue
                 
                 # Extract audio data
                 if isinstance(result[0], tuple):
