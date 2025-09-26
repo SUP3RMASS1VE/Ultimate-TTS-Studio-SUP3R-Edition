@@ -436,6 +436,8 @@ def save_audio_with_format(audio, sample_rate, audio_format, output_folder, file
     """Save audio with the specified format"""
     import soundfile as sf
     from pathlib import Path
+    import tempfile
+    import os
     
     # Ensure output folder exists
     output_folder = Path(output_folder)
@@ -445,9 +447,46 @@ def save_audio_with_format(audio, sample_rate, audio_format, output_folder, file
         filepath = output_folder / f"{filename_base}.wav"
         sf.write(str(filepath), audio, sample_rate)
     elif audio_format.lower() == "mp3":
-        # For MP3, we'd need additional libraries, fallback to WAV for now
-        filepath = output_folder / f"{filename_base}.wav"
-        sf.write(str(filepath), audio, sample_rate)
+        # Convert to MP3 using pydub
+        try:
+            from pydub import AudioSegment
+            
+            # Create temporary WAV file
+            temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            temp_wav.close()
+            
+            try:
+                # Save as high-quality WAV first
+                sf.write(temp_wav.name, audio, sample_rate)
+                
+                # Convert WAV to MP3 with high quality settings
+                audio_segment = AudioSegment.from_wav(temp_wav.name)
+                filepath = output_folder / f"{filename_base}.mp3"
+                
+                # Export with high quality settings
+                audio_segment.export(
+                    str(filepath),
+                    format="mp3",
+                    bitrate="320k",  # High quality
+                    parameters=["-q:a", "0"]  # Highest quality
+                )
+                
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_wav.name)
+                except:
+                    pass
+                    
+        except ImportError:
+            # Fallback to WAV if pydub not available
+            print("⚠️ Warning: pydub not available for MP3 conversion, saving as WAV instead")
+            filepath = output_folder / f"{filename_base}.wav"
+            sf.write(str(filepath), audio, sample_rate)
+        except Exception as e:
+            print(f"⚠️ MP3 conversion failed: {e}, saving as WAV instead")
+            filepath = output_folder / f"{filename_base}.wav"
+            sf.write(str(filepath), audio, sample_rate)
     else:
         filepath = output_folder / f"{filename_base}.wav"  # Default to WAV
         sf.write(str(filepath), audio, sample_rate)

@@ -107,6 +107,7 @@ absl-py
 av
 aiortc
 hf-xet
-# IndexTTS2 Support (Optional)
-# For IndexTTS2 functionality, run: install_indextts2.bat
-# Or manually install: pip install -r indextts2_requirements.txt
+
+# VoxCPM dependencies
+openai-whisper
+

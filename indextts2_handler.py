@@ -995,11 +995,72 @@ def generate_indextts2_tts(
         # Save audio file
         if audio_format.lower() == "wav":
             sf.write(output_path, audio_array, handler.sample_rate)
+        elif audio_format.lower() == "mp3":
+            # Convert to MP3 using pydub
+            try:
+                from pydub import AudioSegment
+                import tempfile
+                
+                # Create temporary WAV file
+                temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                temp_wav.close()
+                
+                try:
+                    # Save as high-quality WAV first
+                    sf.write(temp_wav.name, audio_array, handler.sample_rate)
+                    
+                    # Convert WAV to MP3 with high quality settings
+                    audio_segment = AudioSegment.from_wav(temp_wav.name)
+                    
+                    # Export with high quality settings
+                    audio_segment.export(
+                        output_path,
+                        format="mp3",
+                        bitrate="320k",  # High quality
+                        parameters=["-q:a", "0"]  # Highest quality
+                    )
+                    
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.unlink(temp_wav.name)
+                    except:
+                        pass
+                        
+            except ImportError:
+                # Fallback to WAV if pydub not available
+                print("⚠️ Warning: pydub not available for MP3 conversion, saving as WAV instead")
+                wav_filename = f"indextts2_output_{timestamp}.wav"
+                wav_output_path = os.path.join("outputs", wav_filename)
+                sf.write(wav_output_path, audio_array, handler.sample_rate)
+                output_path = wav_output_path
+            except Exception as e:
+                print(f"⚠️ MP3 conversion failed: {e}, saving as WAV instead")
+                wav_filename = f"indextts2_output_{timestamp}.wav"
+                wav_output_path = os.path.join("outputs", wav_filename)
+                sf.write(wav_output_path, audio_array, handler.sample_rate)
+                output_path = wav_output_path
         else:
-            # For other formats, use librosa
-            sf.write(output_path, audio_array, handler.sample_rate, format=audio_format)
+            # For other formats, try soundfile (may not work for all formats)
+            try:
+                sf.write(output_path, audio_array, handler.sample_rate, format=audio_format)
+            except Exception as e:
+                print(f"⚠️ Format {audio_format} not supported, saving as WAV instead")
+                wav_filename = f"indextts2_output_{timestamp}.wav"
+                wav_output_path = os.path.join("outputs", wav_filename)
+                sf.write(wav_output_path, audio_array, handler.sample_rate)
+                output_path = wav_output_path
         
-        return output_path, f"✅ Audio saved to {output_path}"
+        # Calculate duration and create enhanced status message
+        duration = len(audio_array) / handler.sample_rate
+        filename = os.path.basename(output_path)
+        
+        status_message = f"✅ IndexTTS2 synthesis completed\n"
+        status_message += f"📁 Saved as: {filename}\n"
+        status_message += f"⏱️ Duration: {duration:.2f}s\n"
+        status_message += f"📊 Sample Rate: {handler.sample_rate}Hz"
+        
+        return output_path, status_message
         
     except Exception as e:
         import traceback

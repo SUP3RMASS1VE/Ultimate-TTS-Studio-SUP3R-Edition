@@ -11,10 +11,29 @@ import torch
 import base64
 import tempfile
 import json
+import re
 from pathlib import Path
-from typing import Optional, Union, Tuple, Dict, Any
+from typing import Optional, Union, Tuple, Dict, Any, List
 from datetime import datetime
 from contextlib import contextmanager
+
+# Import for audio file saving
+try:
+    import soundfile as sf
+    SOUNDFILE_AVAILABLE = True
+except ImportError:
+    try:
+        from scipy.io.wavfile import write
+        SOUNDFILE_AVAILABLE = False
+    except ImportError:
+        SOUNDFILE_AVAILABLE = None
+
+# Import for MP3 conversion
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -40,6 +59,199 @@ try:
     HF_HUB_AVAILABLE = True
 except Exception:
     HF_HUB_AVAILABLE = False
+
+def split_text_for_higgs(text: str, max_length: int = 100) -> List[str]:
+    """
+    Split text into chunks suitable for Higgs Audio processing.
+    Ensures no text is lost during chunking.
+    
+    Args:
+        text: Input text to split
+        max_length: Maximum length per chunk (in characters)
+    
+    Returns:
+        List of text chunks
+    """
+    if len(text) <= max_length:
+        return [text]
+    
+    # Simple sentence-based chunking that preserves all text
+    # Split on sentence endings but keep the punctuation
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # If adding this sentence would exceed max_length, save current chunk and start new one
+        if current_chunk and len(current_chunk + " " + sentence) > max_length:
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+            current_chunk = sentence
+        else:
+            if current_chunk:
+                current_chunk += " " + sentence
+            else:
+                current_chunk = sentence
+    
+    # Add the last chunk if it has content
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    # If we still have chunks that are too long, split them by words
+    final_chunks = []
+    for chunk in chunks:
+        if len(chunk) <= max_length:
+            final_chunks.append(chunk)
+        else:
+            # Split long chunks by words while preserving all content
+            words = chunk.split()
+            temp_chunk = ""
+            
+            for word in words:
+                # If adding this word would exceed max_length, save current chunk
+                if temp_chunk and len(temp_chunk + " " + word) > max_length:
+                    if temp_chunk.strip():
+                        final_chunks.append(temp_chunk.strip())
+                    temp_chunk = word
+                else:
+                    if temp_chunk:
+                        temp_chunk += " " + word
+                    else:
+                        temp_chunk = word
+            
+            # Add the final word chunk
+            if temp_chunk.strip():
+                final_chunks.append(temp_chunk.strip())
+    
+    # Ensure we haven't lost any text
+    original_text_clean = re.sub(r'\s+', ' ', text.strip())
+    reconstructed_text = ' '.join(final_chunks)
+    reconstructed_clean = re.sub(r'\s+', ' ', reconstructed_text.strip())
+    
+    if len(reconstructed_clean) < len(original_text_clean) * 0.95:
+        print(f"⚠️ WARNING: Chunking may have lost text!")
+        print(f"   Original length: {len(original_text_clean)}")
+        print(f"   Reconstructed length: {len(reconstructed_clean)}")
+        # Fallback: use simple character-based chunking
+        return [text[i:i+max_length] for i in range(0, len(text), max_length)]
+    
+    return final_chunks
+
+def save_higgs_audio_file(audio_data: np.ndarray, sample_rate: int, audio_format: str = "wav", output_folder: str = "outputs", filename_base: str = None) -> Tuple[str, str]:
+    """
+    Save Higgs Audio output to file
+    
+    Args:
+        audio_data: Audio data array (int16 format)
+        sample_rate: Sample rate
+        audio_format: Output format ("wav" or "mp3")
+        output_folder: Output directory
+        filename_base: Base filename without extension
+    
+    Returns:
+        Tuple of (filepath, filename)
+    """
+    if filename_base is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_base = f"higgs_audio_{timestamp}"
+    
+    # Ensure output folder exists
+    output_folder = Path(output_folder)
+    output_folder.mkdir(exist_ok=True)
+    
+    # Convert int16 audio back to float32 range [-1, 1] for saving
+    if audio_data.dtype == np.int16:
+        audio_float = audio_data.astype(np.float32) / 32767.0
+    else:
+        audio_float = audio_data
+    
+    audio_format = audio_format.lower()
+    
+    if audio_format == "wav":
+        filename = f"{filename_base}.wav"
+        filepath = output_folder / filename
+        
+        if SOUNDFILE_AVAILABLE:
+            sf.write(str(filepath), audio_float, sample_rate)
+        elif SOUNDFILE_AVAILABLE is False:
+            # Use scipy fallback
+            from scipy.io.wavfile import write
+            write(str(filepath), sample_rate, audio_data)  # Use original int16 data
+        else:
+            raise RuntimeError("No audio writing library available (soundfile or scipy)")
+    
+    elif audio_format == "mp3":
+        # Convert to MP3 using pydub
+        if not PYDUB_AVAILABLE:
+            # Fallback to WAV if pydub not available
+            print("⚠️ Warning: pydub not available, saving as WAV instead")
+            filename = f"{filename_base}.wav"
+            filepath = output_folder / filename
+            
+            if SOUNDFILE_AVAILABLE:
+                sf.write(str(filepath), audio_float, sample_rate)
+            elif SOUNDFILE_AVAILABLE is False:
+                from scipy.io.wavfile import write
+                write(str(filepath), sample_rate, audio_data)
+            else:
+                raise RuntimeError("No audio writing library available")
+        else:
+            # Save as temporary WAV first, then convert to MP3
+            import tempfile
+            
+            # Create temporary WAV file
+            temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            temp_wav.close()
+            
+            try:
+                # Save as high-quality WAV first
+                if SOUNDFILE_AVAILABLE:
+                    sf.write(temp_wav.name, audio_float, sample_rate)
+                elif SOUNDFILE_AVAILABLE is False:
+                    from scipy.io.wavfile import write
+                    write(temp_wav.name, sample_rate, audio_data)
+                else:
+                    raise RuntimeError("No audio writing library available")
+                
+                # Convert WAV to MP3 with high quality settings
+                audio_segment = AudioSegment.from_wav(temp_wav.name)
+                filename = f"{filename_base}.mp3"
+                filepath = output_folder / filename
+                
+                # Export with high quality settings
+                audio_segment.export(
+                    str(filepath),
+                    format="mp3",
+                    bitrate="320k",  # High quality
+                    parameters=["-q:a", "0"]  # Highest quality
+                )
+                
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_wav.name)
+                except:
+                    pass
+    
+    else:
+        # Default to WAV
+        filename = f"{filename_base}.wav"
+        filepath = output_folder / filename
+        
+        if SOUNDFILE_AVAILABLE:
+            sf.write(str(filepath), audio_float, sample_rate)
+        elif SOUNDFILE_AVAILABLE is False:
+            from scipy.io.wavfile import write
+            write(str(filepath), sample_rate, audio_data)
+        else:
+            raise RuntimeError("No audio writing library available")
+    
+    return str(filepath), filename
 
 class HiggsAudioHandler:
     """Handler for Higgs Audio TTS system"""
@@ -307,9 +519,12 @@ class HiggsAudioHandler:
         for tag, replacement in tag_replacements:
             text = text.replace(tag, replacement)
         
-        # Clean up whitespace
+        # Clean up whitespace (more conservative approach)
         lines = text.split("\n")
-        text = "\n".join([" ".join(line.split()) for line in lines if line.strip()])
+        # Only remove completely empty lines, preserve lines with some content
+        filtered_lines = [line for line in lines if line.strip()]
+        if filtered_lines:
+            text = "\n".join([" ".join(line.split()) for line in filtered_lines])
         text = text.strip()
         
         # Add ending punctuation if needed
@@ -360,6 +575,11 @@ class HiggsAudioHandler:
         
         # Add the main user message
         normalized_text = self._normalize_text(text)
+        # Debug: check if normalization is changing the text significantly
+        if len(normalized_text) < len(text) * 0.8:  # If text shrunk by more than 20%
+            print(f"   ⚠️ Text normalization significantly changed length: {len(text)} -> {len(normalized_text)}")
+            print(f"   Original: '{text}'")
+            print(f"   Normalized: '{normalized_text}'")
         messages.append(Message(role="user", content=normalized_text))
         
         return ChatMLSample(messages=messages)
@@ -376,10 +596,14 @@ class HiggsAudioHandler:
         top_k: int = 50,
         max_tokens: int = 1024,
         ras_win_len: int = 7,
-        ras_win_max_num_repeat: int = 2
+        ras_win_max_num_repeat: int = 2,
+        chunk_length: int = 100
     ) -> Tuple[Optional[Tuple[int, np.ndarray]], str]:
         """
-        Generate speech using Higgs Audio
+        Generate speech using Higgs Audio with automatic text chunking for long texts
+        
+        Args:
+            chunk_length: Maximum character length per chunk for processing long texts
         
         Returns:
             Tuple of (audio_data, info_message)
@@ -394,12 +618,90 @@ class HiggsAudioHandler:
                 return None, "❌ Failed to initialize Higgs Audio engine"
         
         try:
+            # Split text into chunks if it's long
+            text_chunks = split_text_for_higgs(text, max_length=chunk_length)
+            print(f"🔍 Original text length: {len(text)} chars")
+            print(f"🔍 Split into {len(text_chunks)} chunks with max length {chunk_length}")
+            total_chunk_chars = sum(len(chunk) for chunk in text_chunks)
+            print(f"🔍 Total characters in chunks: {total_chunk_chars} (ratio: {total_chunk_chars/len(text):.2f})")
+            
+            # If we have multiple chunks, process them separately and concatenate
+            if len(text_chunks) > 1:
+                print(f"🎤 Higgs Audio: Processing {len(text_chunks)} text chunks for long text")
+                chunk_audios = []
+                
+                for i, chunk in enumerate(text_chunks):
+                    print(f"🎤 Processing chunk {i+1}/{len(text_chunks)} ({len(chunk)} chars): {chunk[:50]}...")
+                    print(f"   Full chunk text: '{chunk}'")  # Debug: show full chunk
+                    
+                    # Generate audio for this chunk with increased token limit for small chunks
+                    chunk_max_tokens = min(max_tokens, 2048)  # Increase token limit for chunks
+                    chunk_result, chunk_message = self._generate_single_chunk(
+                        chunk, voice_preset, reference_audio, reference_text, 
+                        system_prompt, temperature, top_p, top_k, chunk_max_tokens,
+                        ras_win_len, ras_win_max_num_repeat
+                    )
+                    
+                    if chunk_result is None:
+                        print(f"   ❌ Chunk {i+1} failed: {chunk_message}")
+                        return None, f"❌ Error processing chunk {i+1}: {chunk_message}"
+                    
+                    print(f"   ✅ Chunk {i+1} processed successfully, audio length: {len(chunk_result[1])} samples")
+                    # Extract the audio array (second element of the tuple)
+                    chunk_audios.append(chunk_result[1])
+                
+                # Concatenate all chunk audios with small pauses
+                print(f"🎵 Combining {len(chunk_audios)} audio chunks...")
+                pause_samples = int(0.3 * self.sample_rate)  # 0.3 second pause
+                pause_audio = np.zeros(pause_samples, dtype=np.int16)
+                
+                combined_audio = chunk_audios[0]
+                for chunk_audio in chunk_audios[1:]:
+                    combined_audio = np.concatenate([combined_audio, pause_audio, chunk_audio])
+                
+                print(f"✅ Generated {len(combined_audio)} total audio samples from {len(text_chunks)} chunks")
+                return (self.sample_rate, combined_audio), f"✅ Long text processed successfully in {len(text_chunks)} chunks"
+            
+            else:
+                # Single chunk, process normally
+                print(f"🎤 Generating speech with Higgs Audio: {text[:50]}...")
+                return self._generate_single_chunk(
+                    text, voice_preset, reference_audio, reference_text, 
+                    system_prompt, temperature, top_p, top_k, max_tokens,
+                    ras_win_len, ras_win_max_num_repeat
+                )
+                
+        except Exception as e:
+            error_msg = f"❌ Error generating speech: {str(e)}"
+            print(error_msg)
+            return None, error_msg
+    
+    def _generate_single_chunk(
+        self,
+        text: str,
+        voice_preset: str = "EMPTY",
+        reference_audio: Optional[str] = None,
+        reference_text: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temperature: float = 1.0,
+        top_p: float = 0.95,
+        top_k: int = 50,
+        max_tokens: int = 1024,
+        ras_win_len: int = 7,
+        ras_win_max_num_repeat: int = 2
+    ) -> Tuple[Optional[Tuple[int, np.ndarray]], str]:
+        """
+        Generate speech for a single text chunk using Higgs Audio
+        
+        Returns:
+            Tuple of (audio_data, info_message)
+            audio_data is (sample_rate, audio_array) or None if failed
+        """
+        try:
             # Prepare ChatML sample
             chatml_sample = self._prepare_chatml_sample(
                 text, voice_preset, reference_audio, reference_text, system_prompt
             )
-            
-            print(f"🎤 Generating speech with Higgs Audio: {text[:50]}...")
             
             # Generate using the engine
             response = self.engine.generate(
@@ -421,13 +723,12 @@ class HiggsAudioHandler:
                 if np.all(audio_data == 0):
                     return None, "⚠️ Generated audio is silent"
                 
-                print(f"✅ Generated {len(audio_data)} audio samples")
                 return (response.sampling_rate, audio_data), f"✅ Speech generated successfully"
             else:
                 return None, "❌ No audio generated"
                 
         except Exception as e:
-            error_msg = f"❌ Error generating speech: {str(e)}"
+            error_msg = f"❌ Error generating speech chunk: {str(e)}"
             print(error_msg)
             return None, error_msg
     
@@ -472,6 +773,7 @@ def generate_higgs_audio_tts(
     max_tokens: int = 1024,
     ras_win_len: int = 7,
     ras_win_max_num_repeat: int = 2,
+    chunk_length: int = 100,
     effects_settings: Optional[Dict[str, Any]] = None,
     audio_format: str = "wav",
     skip_file_saving: bool = False
@@ -491,6 +793,7 @@ def generate_higgs_audio_tts(
         max_tokens: Maximum tokens to generate
         ras_win_len: RAS window length
         ras_win_max_num_repeat: RAS max repetitions
+        chunk_length: Maximum character length per chunk for processing long texts
         effects_settings: Audio effects (not used by Higgs Audio)
         audio_format: Output format (not used by Higgs Audio)
         skip_file_saving: Whether to skip saving file
@@ -504,7 +807,8 @@ def generate_higgs_audio_tts(
     ref_audio = reference_audio if reference_audio and reference_audio.strip() else None
     preset = voice_preset if not ref_audio else "EMPTY"
     
-    return handler.generate_speech(
+    # Generate speech
+    result = handler.generate_speech(
         text=text,
         voice_preset=preset,
         reference_audio=ref_audio,
@@ -515,5 +819,43 @@ def generate_higgs_audio_tts(
         top_k=top_k,
         max_tokens=max_tokens,
         ras_win_len=ras_win_len,
-        ras_win_max_num_repeat=ras_win_max_num_repeat
+        ras_win_max_num_repeat=ras_win_max_num_repeat,
+        chunk_length=chunk_length
     )
+    
+    # Unpack result
+    audio_data, status_message = result
+    
+    if audio_data is None:
+        return None, status_message
+    
+    # Save to file if not skipping
+    if not skip_file_saving:
+        try:
+            sample_rate, audio_array = audio_data
+            
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_base = f"higgs_audio_{timestamp}"
+            
+            # Save audio file
+            filepath, filename = save_higgs_audio_file(
+                audio_array, sample_rate, audio_format, "outputs", filename_base
+            )
+            
+            # Calculate duration
+            duration = len(audio_array) / sample_rate
+            
+            # Update status message with file info
+            enhanced_status = f"{status_message}\n"
+            enhanced_status += f"📁 Saved as: {filename}\n"
+            enhanced_status += f"⏱️ Duration: {duration:.2f}s\n"
+            enhanced_status += f"📊 Sample Rate: {sample_rate}Hz"
+            
+            return audio_data, enhanced_status
+            
+        except Exception as save_error:
+            print(f"⚠️ Warning: Could not save audio file: {save_error}")
+            return audio_data, f"{status_message} (file saving failed)"
+    
+    return result

@@ -180,6 +180,51 @@ except ImportError:
     VIBEVOICE_AVAILABLE = False
     print("⚠️ VibeVoice not available. Some features will be disabled.")
 
+# VoxCPM imports
+try:
+    with suppress_specific_warnings():
+        from voxcpm_handler import (
+            get_voxcpm_handler, generate_voxcpm_tts, init_voxcpm, 
+            unload_voxcpm, get_voxcpm_status, transcribe_voxcpm_audio
+        )
+    VOXCPM_AVAILABLE = True
+    print("✅ VoxCPM handler loaded")
+except ImportError:
+    VOXCPM_AVAILABLE = False
+    print("⚠️ VoxCPM not available. Some features will be disabled.")
+
+# ===== VOXCPM MODEL MANAGEMENT =====
+def init_voxcpm_model():
+    """Initialize VoxCPM model"""
+    if not VOXCPM_AVAILABLE:
+        return False, "❌ VoxCPM not available"
+    
+    try:
+        success, message = init_voxcpm()
+        if success:
+            MODEL_STATUS['voxcpm'] = {'loaded': True}
+            return True, message
+        else:
+            return False, message
+    except Exception as e:
+        error_msg = f"❌ Error initializing VoxCPM: {str(e)}"
+        print(error_msg)
+        return False, error_msg
+
+def unload_voxcpm_model():
+    """Unload VoxCPM model"""
+    if not VOXCPM_AVAILABLE:
+        return "❌ VoxCPM not available"
+    
+    try:
+        message = unload_voxcpm()
+        MODEL_STATUS['voxcpm'] = {'loaded': False}
+        return message
+    except Exception as e:
+        error_msg = f"⚠️ Error unloading VoxCPM: {str(e)}"
+        print(error_msg)
+        return error_msg
+
 # ===== HIGGS AUDIO MODEL MANAGEMENT =====
 def init_higgs_audio():
     """Initialize Higgs Audio model"""
@@ -574,8 +619,9 @@ def generate_conversation_audio_simple(
         speakers = get_speaker_names_from_script(conversation_script)
         print(f"🎤 Found speakers: {speakers}")
         
-        # Map speakers to voice samples
+        # Map speakers to voice samples and generate consistent seeds
         speaker_voice_map = {}
+        speaker_seed_map = {}
         for i, speaker in enumerate(speakers):
             if i < len(voice_samples) and voice_samples[i] is not None:
                 speaker_voice_map[speaker] = voice_samples[i]
@@ -583,6 +629,10 @@ def generate_conversation_audio_simple(
             else:
                 speaker_voice_map[speaker] = None
                 print(f"🎤 {speaker} -> No voice sample")
+            
+            # Generate a consistent seed for each speaker
+            speaker_seed_map[speaker] = np.random.randint(0, 2147483647)
+            print(f"🎲 {speaker} -> seed: {speaker_seed_map[speaker]}")
         
         conversation_audio_chunks = []
         conversation_info = []
@@ -690,6 +740,7 @@ def generate_conversation_audio_simple(
                         1024,  # max_tokens
                         7,     # ras_win_len
                         2,     # ras_win_max_num_repeat
+                        100,   # chunk_length
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
@@ -708,6 +759,42 @@ def generate_conversation_audio_simple(
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
+                    )
+                elif selected_engine == 'VoxCPM':
+                    print(f"🎤 Using VoxCPM for {speaker}")
+                    
+                    # Auto-transcribe reference audio if provided
+                    ref_text = None
+                    if ref_audio and VOXCPM_AVAILABLE:
+                        try:
+                            print(f"🎤 Auto-transcribing reference audio for {speaker}...")
+                            ref_text = transcribe_voxcpm_audio(ref_audio)
+                            if ref_text:
+                                print(f"📝 Transcribed: {ref_text[:50]}...")
+                            else:
+                                print("⚠️ No transcription result, using default voice")
+                        except Exception as e:
+                            print(f"⚠️ Transcription failed for {speaker}: {e}")
+                            ref_text = None
+                    
+                    # Use consistent seed for this speaker
+                    speaker_seed = speaker_seed_map.get(speaker, None)
+                    print(f"🎲 Using consistent seed {speaker_seed} for {speaker}")
+                    
+                    result = generate_voxcpm_unified_tts(
+                        text,
+                        ref_audio,
+                        ref_text,
+                        2.0,   # cfg_value
+                        10,    # inference_timesteps
+                        True,  # normalize
+                        True,  # denoise
+                        True,  # retry_badcase
+                        3,     # retry_badcase_max_times
+                        6.0,   # retry_badcase_ratio_threshold
+                        speaker_seed,  # Use consistent seed per speaker
+                        effects_settings,
+                        audio_format
                     )
                 else:
                     return None, f"❌ Unsupported TTS engine: {selected_engine}"
@@ -2300,6 +2387,17 @@ def get_model_status():
     else:
         status_text += "🎙️ **Higgs Audio:** ❌ Not available\n"
     
+    # VoxCPM status
+    if VOXCPM_AVAILABLE:
+        if MODEL_STATUS.get('voxcpm', {}).get('loading', False):
+            status_text += "🎤 **VoxCPM:** ⏳ Loading...\n"
+        elif MODEL_STATUS.get('voxcpm', {}).get('loaded', False):
+            status_text += "🎤 **VoxCPM:** ✅ Loaded\n"
+        else:
+            status_text += "🎤 **VoxCPM:** ⭕ Not loaded\n"
+    else:
+        status_text += "🎤 **VoxCPM:** ❌ Not available\n"
+    
     # KittenTTS status
     if KITTEN_TTS_AVAILABLE:
         if MODEL_STATUS['kitten_tts']['loading']:
@@ -3478,13 +3576,27 @@ def generate_indextts_tts(
             
             # Save file if not skipping
             if not skip_file_saving:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename_base = f"indextts_output_{timestamp}"
-                output_folder = "outputs"
-                
-                file_path, status_message = save_audio_with_format(
-                    audio_data, sample_rate, audio_format, output_folder, filename_base
-                )
+                try:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename_base = f"indextts_output_{timestamp}"
+                    output_folder = "outputs"
+                    
+                    file_path, filename = save_audio_with_format(
+                        audio_data, sample_rate, audio_format, output_folder, filename_base
+                    )
+                    
+                    # Calculate duration
+                    duration = len(audio_data) / sample_rate
+                    
+                    # Create enhanced status message
+                    status_message = f"✅ IndexTTS synthesis completed\n"
+                    status_message += f"📁 Saved as: {filename}\n"
+                    status_message += f"⏱️ Duration: {duration:.2f}s\n"
+                    status_message += f"📊 Sample Rate: {sample_rate}Hz"
+                    
+                except Exception as save_error:
+                    print(f"⚠️ Warning: Could not save IndexTTS audio file: {save_error}")
+                    status_message = "✅ IndexTTS synthesis completed (file saving failed)"
             else:
                 status_message = "✅ IndexTTS synthesis completed"
             
@@ -3837,8 +3949,14 @@ def convert_ebook_to_audiobook(
         return None, "❌ No eBook file provided"
     
     try:
-        # Convert eBook to text chunks
-        text_chunks, metadata = convert_ebook_to_text_chunks(file_path, max_chunk_length)
+        # Convert eBook to text chunks with VoxCPM-specific optimization
+        if tts_engine == "VoxCPM":
+            # Use smaller chunks for VoxCPM to avoid badcase issues
+            voxcpm_optimized_chunk_length = min(max_chunk_length, 350)
+            print(f"🎤 Using VoxCPM-optimized chunk length: {voxcpm_optimized_chunk_length}")
+            text_chunks, metadata = convert_ebook_to_text_chunks(file_path, voxcpm_optimized_chunk_length)
+        else:
+            text_chunks, metadata = convert_ebook_to_text_chunks(file_path, max_chunk_length)
         
         if not text_chunks:
             return None, "❌ No text content found in eBook"
@@ -3885,6 +4003,7 @@ def convert_ebook_to_audiobook(
         fish_chunk_reference_audio = fish_ref_audio
         fish_chunk_reference_text = fish_ref_text
         
+        
         for i, chunk in enumerate(text_chunks):
             print(f"Processing chunk {i+1}/{total_chunks}: {chunk['title']}")
             
@@ -3922,6 +4041,7 @@ def convert_ebook_to_audiobook(
                     chunk['content'], higgs_ref_audio, higgs_ref_text, higgs_voice_preset,
                     higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
                     higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+                    100,  # chunk_length
                     effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
                 )
             elif tts_engine == "IndexTTS2":
@@ -4104,6 +4224,198 @@ def get_ebook_info_display(analysis_result):
     
     return info_text
 
+# ===== VOXCPM FUNCTIONS =====
+def generate_voxcpm_unified_tts(
+    text_input: str,
+    voxcpm_ref_audio: str = None,
+    voxcpm_ref_text: str = None,
+    voxcpm_cfg_value: float = 2.0,
+    voxcpm_inference_timesteps: int = 10,
+    voxcpm_normalize: bool = True,
+    voxcpm_denoise: bool = True,
+    voxcpm_retry_badcase: bool = True,
+    voxcpm_retry_badcase_max_times: int = 3,
+    voxcpm_retry_badcase_ratio_threshold: float = 6.0,
+    voxcpm_seed: int = None,
+    effects_settings: dict = None,
+    audio_format: str = "wav"
+):
+    """Generate TTS audio using VoxCPM with voice cloning capabilities."""
+    if not VOXCPM_AVAILABLE:
+        return None, "❌ VoxCPM not available"
+    
+    if not text_input.strip():
+        return None, "❌ Please enter text to synthesize"
+    
+    try:
+        print(f"🎯 Generating VoxCPM TTS...")
+        print(f"   Text: {text_input[:50]}...")
+        
+        # Generate speech using VoxCPM handler
+        handler = get_voxcpm_handler()
+        audio_array, message = handler.generate_speech(
+            text=text_input,
+            reference_audio=voxcpm_ref_audio,
+            reference_text=voxcpm_ref_text,
+            cfg_value=voxcpm_cfg_value,
+            inference_timesteps=voxcpm_inference_timesteps,
+            normalize=voxcpm_normalize,
+            denoise=voxcpm_denoise,
+            retry_badcase=voxcpm_retry_badcase,
+            retry_badcase_max_times=voxcpm_retry_badcase_max_times,
+            retry_badcase_ratio_threshold=voxcpm_retry_badcase_ratio_threshold,
+            seed=voxcpm_seed
+        )
+        
+        if audio_array is None:
+            return None, message
+        
+        # VoxCPM returns numpy array, we need to format it for the unified interface
+        sample_rate = handler.sample_rate  # 16000
+        
+        # Apply effects if specified
+        if effects_settings:
+            try:
+                from tools.audio_effects import apply_audio_effects
+                print("🎛️ Applying audio effects...")
+                audio_array = apply_audio_effects(audio_array, sample_rate, effects_settings)
+            except Exception as e:
+                print(f"⚠️ Error applying effects: {e}")
+                # Continue without effects
+        
+        # Convert format if needed
+        if audio_format.lower() == "mp3":
+            try:
+                from pydub import AudioSegment
+                import tempfile
+                print("🔄 Converting to MP3...")
+                
+                # Create temporary WAV file
+                temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                temp_wav.close()
+                
+                try:
+                    # Save as high-quality WAV first
+                    # Convert int16 to float32 if needed
+                    if audio_array.dtype == np.int16:
+                        audio_float = audio_array.astype(np.float32) / 32767.0
+                    else:
+                        audio_float = audio_array
+                    
+                    sf.write(temp_wav.name, audio_float, sample_rate)
+                    
+                    # Convert WAV to MP3 with high quality settings
+                    audio_segment = AudioSegment.from_wav(temp_wav.name)
+                    
+                    # Create a new temporary MP3 file
+                    temp_mp3 = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+                    temp_mp3.close()
+                    
+                    # Export with high quality settings
+                    audio_segment.export(
+                        temp_mp3.name,
+                        format="mp3",
+                        bitrate="320k",  # High quality
+                        parameters=["-q:a", "0"]  # Highest quality
+                    )
+                    
+                    # Read back the MP3 as audio array
+                    converted_segment = AudioSegment.from_mp3(temp_mp3.name)
+                    audio_array = np.array(converted_segment.get_array_of_samples(), dtype=np.float32)
+                    
+                    # Convert to proper format for return
+                    if converted_segment.channels == 2:
+                        audio_array = audio_array.reshape((-1, 2))
+                        audio_array = audio_array.mean(axis=1)  # Convert to mono
+                    
+                    # Normalize to int16 range
+                    audio_array = (audio_array / np.max(np.abs(audio_array)) * 32767).astype(np.int16)
+                    
+                finally:
+                    # Clean up temporary files
+                    try:
+                        os.unlink(temp_wav.name)
+                        os.unlink(temp_mp3.name)
+                    except:
+                        pass
+                        
+            except Exception as e:
+                print(f"⚠️ MP3 conversion failed: {e}")
+                print("   Falling back to WAV format")
+                # Fall back to WAV - no format change needed
+        
+        # Save to file (using the same pattern as other engines)
+        try:
+            # Create outputs directory if it doesn't exist
+            output_folder = Path("outputs")
+            output_folder.mkdir(exist_ok=True)
+            
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if audio_format.lower() == "mp3":
+                filename = f"voxcpm_tts_{timestamp}.mp3"
+            else:
+                filename = f"voxcpm_tts_{timestamp}.wav"
+            
+            filepath = output_folder / filename
+            
+            # Save the audio file
+            if audio_format.lower() == "mp3":
+                # Audio should already be converted to MP3 format above
+                # But we need to save it as MP3 file
+                if audio_array.dtype == np.int16:
+                    audio_float = audio_array.astype(np.float32) / 32767.0
+                else:
+                    audio_float = audio_array
+                
+                # Save as temporary WAV first, then convert to MP3 for final file
+                temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                temp_wav.close()
+                
+                try:
+                    sf.write(temp_wav.name, audio_float, sample_rate)
+                    audio_segment = AudioSegment.from_wav(temp_wav.name)
+                    audio_segment.export(
+                        str(filepath),
+                        format="mp3",
+                        bitrate="320k",
+                        parameters=["-q:a", "0"]
+                    )
+                finally:
+                    try:
+                        os.unlink(temp_wav.name)
+                    except:
+                        pass
+            else:
+                # Save as WAV
+                if audio_array.dtype == np.int16:
+                    audio_float = audio_array.astype(np.float32) / 32767.0
+                else:
+                    audio_float = audio_array
+                sf.write(str(filepath), audio_float, sample_rate)
+            
+            # Calculate duration
+            duration = len(audio_array) / sample_rate
+            
+            success_message = f"✅ VoxCPM TTS generated successfully\n"
+            success_message += f"📁 Saved as: {filename}\n"
+            success_message += f"⏱️ Duration: {duration:.2f}s\n"
+            success_message += f"📊 Sample Rate: {sample_rate}Hz"
+            
+        except Exception as save_error:
+            print(f"⚠️ Warning: Could not save audio file: {save_error}")
+            success_message = "✅ VoxCPM TTS generated successfully (file saving failed)"
+
+        # Return in the format expected by the conversation handler: (sample_rate, audio_array)
+        return (sample_rate, audio_array), success_message
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        error_msg = f"❌ VoxCPM TTS generation error: {str(e)}"
+        print(error_msg)
+        return None, error_msg
+
 # ===== MAIN GENERATION FUNCTION =====
 def generate_unified_tts(
     # Common parameters
@@ -4174,6 +4486,17 @@ def generate_unified_tts(
     higgs_ras_win_max_num_repeat: int = 2,
     # KittenTTS parameters
     kitten_voice: str = "expr-voice-2-f",
+    # VoxCPM parameters
+    voxcpm_ref_audio: str = None,
+    voxcpm_ref_text: str = None,
+    voxcpm_cfg_value: float = 2.0,
+    voxcpm_inference_timesteps: int = 10,
+    voxcpm_normalize: bool = True,
+    voxcpm_denoise: bool = True,
+    voxcpm_retry_badcase: bool = True,
+    voxcpm_retry_badcase_max_times: int = 3,
+    voxcpm_retry_badcase_ratio_threshold: float = 6.0,
+    voxcpm_seed: int = None,
     # Effects parameters
     gain_db: float = 0,
     enable_eq: bool = False,
@@ -4252,11 +4575,20 @@ def generate_unified_tts(
             text_input, higgs_ref_audio, higgs_ref_text, higgs_voice_preset,
             higgs_system_prompt, higgs_temperature, higgs_top_p, higgs_top_k,
             higgs_max_tokens, higgs_ras_win_len, higgs_ras_win_max_num_repeat,
+            150,  # chunk_length
             effects_settings, audio_format
         )
     elif tts_engine == "KittenTTS":
         return generate_kitten_tts(
             text_input, kitten_voice, effects_settings, audio_format
+        )
+    elif tts_engine == "VoxCPM":
+        return generate_voxcpm_unified_tts(
+            text_input, voxcpm_ref_audio, voxcpm_ref_text, voxcpm_cfg_value,
+            voxcpm_inference_timesteps, voxcpm_normalize, voxcpm_denoise,
+            voxcpm_retry_badcase, voxcpm_retry_badcase_max_times,
+            voxcpm_retry_badcase_ratio_threshold, voxcpm_seed,
+            effects_settings, audio_format
         )
     else:
         return None, "❌ Invalid TTS engine selected"
@@ -5312,7 +5644,7 @@ def create_gradio_interface():
             ✨ ULTIMATE TTS STUDIO PRO ✨
             </div>
             <div class="subtitle">
-            🎭 ChatterboxTTS + Kokoro TTS + Fish Speech + IndexTTS + F5-TTS | SUP3R EDITION 🚀<br/>
+            🎭 ChatterboxTTS + Kokoro TTS + Fish Speech + IndexTTS + F5-TTS + VoxCPM | SUP3R EDITION 🚀<br/>
             <strong>Advanced Text-to-Speech with Multiple Engines, Voice Presets, Audio Effects & Export Options</strong>
             </div>
         </div>
@@ -5585,6 +5917,32 @@ def create_gradio_interface():
                             scale=1
                         )
                 
+                # VoxCPM Management - Compact
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("🎤 **VoxCPM (Can crash randomly)**", elem_classes=["fade-in"])
+                        voxcpm_status = gr.Markdown(
+                            value="⭕ Not loaded" if VOXCPM_AVAILABLE else "❌ Not available",
+                            elem_classes=["fade-in"]
+                        )
+                    with gr.Row():
+                        load_voxcpm_btn = gr.Button(
+                            "🔄 Load",
+                            variant="primary",
+                            size="sm",
+                            visible=VOXCPM_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                        unload_voxcpm_btn = gr.Button(
+                            "🗑️ Unload",
+                            variant="secondary",
+                            size="sm",
+                            visible=VOXCPM_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                
                 # KittenTTS Management - Compact
                 with gr.Column():
                     with gr.Row():
@@ -5639,7 +5997,7 @@ def create_gradio_interface():
                     with gr.TabItem("📝 TEXT TO SYNTHESIZE", id="single_voice"):
                         # Text input with enhanced styling
                         text = gr.Textbox(
-                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, Index TTS and Index TTS 2, Higgs audio TTS and F5 TTS for custom voice cloning or Kitten TTS and Kokoro TTS for high-quality pre-trained voices and VibeVoice for podcast.",
+                            value="Hello! This is a demonstration of the ultimate TTS studio. You can choose between Chatterbox TTS. Fish Speech, VoxCPM, Index TTS and Index TTS 2, Higgs audio TTS and F5 TTS for custom voice cloning or Kitten TTS and Kokoro TTS for high-quality pre-trained voices and VibeVoice for podcast.",
                             label="📝 Text to synthesize",
                             lines=5,
                             placeholder="Enter your text here...",
@@ -5724,7 +6082,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         # Voice Samples Section for Conversation Mode
                         with gr.Group():
                             gr.Markdown("### 🎤 Voice Samples for Speakers")
-                            gr.Markdown("*Upload voice samples for each speaker (required for ChatterboxTTS, Fish Speech, IndexTTS and F5-TTS only - not needed for KittenTTS or Kokoro TTS)*")
+                            gr.Markdown("*Upload voice samples for each speaker (required for ChatterboxTTS, Fish Speech, IndexTTS, F5-TTS and VoxCPM only - not needed for KittenTTS or Kokoro TTS)*")
                             
                             # Dynamic voice sample uploads (up to 5 speakers) and Kokoro voice selection
                             with gr.Row():
@@ -6116,6 +6474,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     • <strong>Fish Speech:</strong> Voice samples help with voice matching ✅<br/>
                                     • <strong>IndexTTS:</strong> Voice samples required for voice cloning ✅<br/>
                                     • <strong>IndexTTS2:</strong> Voice samples + emotion controls for advanced expression ✅<br/>
+                                    • <strong>VoxCPM:</strong> Voice samples required for voice cloning (auto-transcribed with Whisper) ✅<br/>
                                     • <strong>Kokoro TTS:</strong> ✅ Uses pre-trained voices (no samples needed - voices auto-assigned)<br/>
                                     • Voice samples will be automatically assigned when you analyze the script
                                 </p>
@@ -6545,9 +6904,10 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         ("🎯 IndexTTS2 - Advanced Emotion Control", "IndexTTS2"),
                         ("🎵 F5-TTS - Flow Matching TTS", "F5-TTS"),
                         ("🎙️ Higgs Audio - Advanced Multimodal TTS", "Higgs Audio"),
+                        ("🎤 VoxCPM - Voice Cloning TTS", "VoxCPM"),
                         ("🐱 KittenTTS - Mini Model TTS", "KittenTTS")
                     ],
-                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio" if HIGGS_AUDIO_AVAILABLE else "KittenTTS",
+                    value="ChatterboxTTS" if CHATTERBOX_AVAILABLE else "Kokoro TTS" if KOKORO_AVAILABLE else "Fish Speech" if FISH_SPEECH_AVAILABLE else "IndexTTS" if INDEXTTS_AVAILABLE else "F5-TTS" if F5_TTS_AVAILABLE else "Higgs Audio" if HIGGS_AUDIO_AVAILABLE else "VoxCPM" if VOXCPM_AVAILABLE else "KittenTTS",
                     label="🎯 Select TTS Engine",
                     info="Choose your preferred text-to-speech engine (auto-selects when you load a model)",
                     elem_classes=["fade-in"]
@@ -7244,6 +7604,102 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         higgs_ras_win_len = gr.Slider(visible=False, value=7)
                         higgs_ras_win_max_num_repeat = gr.Slider(visible=False, value=2)
             
+            # VoxCPM Tab
+            with gr.TabItem("🎤 VoxCPM", id="voxcpm_tab"):
+                if VOXCPM_AVAILABLE:
+                    with gr.Group() as voxcpm_controls:
+                        gr.Markdown("**🎤 VoxCPM - Voice Cloning TTS**")
+                        gr.Markdown("*💡 Advanced voice cloning with automatic transcription using Whisper!*", elem_classes=["fade-in"])
+                        gr.Markdown("📝 **Instructions:** Upload a clear reference audio (3-10 seconds) and the text will be auto-transcribed using Whisper for voice cloning.")
+                        
+                        # Voice cloning section
+                        with gr.Row():
+                            with gr.Column():
+                                voxcpm_ref_audio = gr.Audio(
+                                    label="🎤 Reference Audio (for voice cloning)",
+                                    type="filepath",
+                                    sources=["upload"]
+                                )
+                                voxcpm_ref_text = gr.Textbox(
+                                    label="📝 Reference Text (auto-transcribed)",
+                                    placeholder="Will be automatically filled when you upload audio above...",
+                                    lines=2
+                                )
+                        
+                        # Advanced settings
+                        with gr.Accordion("⚙️ Advanced Settings", open=False):
+                            gr.Markdown("**CFG Value:** LM guidance on LocDiT, higher for better adherence to prompt")
+                            gr.Markdown("**Inference Timesteps:** Higher for better quality, lower for faster speed")
+                            gr.Markdown("**Normalize/Denoise:** Enable external processing tools")
+                            gr.Markdown("**Retry:** Enable retrying for bad cases with configurable thresholds")
+                            gr.Markdown("**Seed:** Random seed for reproducible generation (-1 for random)")
+                            with gr.Row():
+                                voxcpm_cfg_value = gr.Slider(
+                                    minimum=0.5,
+                                    maximum=5.0,
+                                    value=2.0,
+                                    step=0.1,
+                                    label="CFG Value"
+                                )
+                                voxcpm_inference_timesteps = gr.Slider(
+                                    minimum=5,
+                                    maximum=50,
+                                    value=10,
+                                    step=1,
+                                    label="Inference Timesteps"
+                                )
+                            
+                            with gr.Row():
+                                voxcpm_normalize = gr.Checkbox(
+                                    value=True,
+                                    label="Normalize"
+                                )
+                                voxcpm_denoise = gr.Checkbox(
+                                    value=True,
+                                    label="Denoise"
+                                )
+                                voxcpm_retry_badcase = gr.Checkbox(
+                                    value=True,
+                                    label="Retry Bad Cases"
+                                )
+                            
+                            with gr.Row():
+                                voxcpm_retry_badcase_max_times = gr.Number(
+                                    value=3,
+                                    minimum=1,
+                                    maximum=10,
+                                    step=1,
+                                    label="Max Retry Times"
+                                )
+                                voxcpm_retry_badcase_ratio_threshold = gr.Number(
+                                    value=6.0,
+                                    minimum=1.0,
+                                    maximum=10.0,
+                                    step=0.5,
+                                    label="Retry Ratio Threshold"
+                                )
+                                voxcpm_seed = gr.Number(
+                                    value=-1,
+                                    minimum=-1,
+                                    maximum=2147483647,
+                                    step=1,
+                                    label="Seed"
+                                )
+                else:
+                    with gr.Group():
+                        gr.Markdown("<div style='text-align: center; padding: 40px; opacity: 0.5;'>**🎤 VoxCPM** - ⚠️ Not available - please install with: `pip install voxcpm openai-whisper`</div>")
+                        # Create dummy components
+                        voxcpm_ref_audio = gr.Audio(visible=False)
+                        voxcpm_ref_text = gr.Textbox(visible=False)
+                        voxcpm_cfg_value = gr.Slider(visible=False, value=2.0)
+                        voxcpm_inference_timesteps = gr.Slider(visible=False, value=10)
+                        voxcpm_normalize = gr.Checkbox(visible=False, value=True)
+                        voxcpm_denoise = gr.Checkbox(visible=False, value=True)
+                        voxcpm_retry_badcase = gr.Checkbox(visible=False, value=True)
+                        voxcpm_retry_badcase_max_times = gr.Number(visible=False, value=3)
+                        voxcpm_retry_badcase_ratio_threshold = gr.Number(visible=False, value=6.0)
+                        voxcpm_seed = gr.Number(visible=False, value=-1)
+            
             # KittenTTS Tab
             with gr.TabItem("🐱 KittenTTS", id="kitten_tab"):
                 if KITTEN_TTS_AVAILABLE:
@@ -7463,6 +7919,30 @@ Alice: I went to Japan. It was absolutely incredible!""",
             higgs_status_text = "⭕ Not loaded"
             # Don't change engine selection when unloading
             return higgs_status_text
+
+        def handle_load_voxcpm():
+            success, message = init_voxcpm_model()
+            if success:
+                voxcpm_status_text = "✅ Loaded (Auto-selected)"
+                # Auto-select VoxCPM engine when loaded
+                selected_engine = "VoxCPM"
+                # Auto-switch to VoxCPM tab
+                selected_tab = gr.update(selected="voxcpm_tab")
+            else:
+                voxcpm_status_text = "❌ Failed to load"
+                selected_engine = gr.update()  # No change to current selection
+                selected_tab = gr.update()  # No tab change
+            
+            if EBOOK_CONVERTER_AVAILABLE:
+                return voxcpm_status_text, selected_engine, selected_engine, selected_tab
+            else:
+                return voxcpm_status_text, selected_engine, selected_tab
+
+        def handle_unload_voxcpm():
+            message = unload_voxcpm_model()
+            voxcpm_status_text = "⭕ Not loaded"
+            # Don't change engine selection when unloading
+            return voxcpm_status_text
 
         def handle_load_kitten():
             success, message = init_kitten_tts_model()
@@ -7728,6 +8208,17 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 outputs=[higgs_status]
             )
         
+        # VoxCPM management
+        if VOXCPM_AVAILABLE:
+            load_voxcpm_btn.click(
+                fn=handle_load_voxcpm,
+                outputs=[voxcpm_status, tts_engine, ebook_tts_engine, engine_tabs] if EBOOK_CONVERTER_AVAILABLE else [voxcpm_status, tts_engine, engine_tabs]
+            )
+            unload_voxcpm_btn.click(
+                fn=handle_unload_voxcpm,
+                outputs=[voxcpm_status]
+            )
+
         # KittenTTS management
         if KITTEN_TTS_AVAILABLE:
             load_kitten_btn.click(
@@ -7886,6 +8377,9 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 higgs_temperature, higgs_top_p, higgs_top_k, higgs_max_tokens,
                 higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                 kitten_voice,
+                voxcpm_ref_audio, voxcpm_ref_text, voxcpm_cfg_value, voxcpm_inference_timesteps,
+                voxcpm_normalize, voxcpm_denoise, voxcpm_retry_badcase, voxcpm_retry_badcase_max_times,
+                voxcpm_retry_badcase_ratio_threshold, voxcpm_seed,
                 gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                 enable_reverb, reverb_room, reverb_damping, reverb_wet,
                 enable_echo, echo_delay, echo_decay,
@@ -8293,6 +8787,26 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 return gr.update(selected=tab_mapping[selected_engine])
             return gr.update()
         
+        # VoxCPM auto-transcription when reference audio is uploaded
+        if VOXCPM_AVAILABLE:
+            def handle_voxcpm_transcription(audio_path):
+                """Auto-transcribe VoxCPM reference audio using Whisper"""
+                if not audio_path:
+                    return ""
+                try:
+                    transcription = transcribe_voxcpm_audio(audio_path)
+                    return transcription
+                except Exception as e:
+                    print(f"❌ VoxCPM transcription error: {e}")
+                    return ""
+            
+            voxcpm_ref_audio.change(
+                fn=handle_voxcpm_transcription,
+                inputs=[voxcpm_ref_audio],
+                outputs=[voxcpm_ref_text],
+                show_progress="minimal"
+            )
+
         # Handle TTS engine changes to enable/disable conversation mode and switch tabs
         tts_engine.change(
             fn=handle_tts_engine_change,
@@ -8356,6 +8870,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                 # KittenTTS parameters
                 kitten_voice_param,
+                # VoxCPM parameters
+                voxcpm_ref_audio, voxcpm_ref_text, voxcpm_cfg_value, voxcpm_inference_timesteps,
+                voxcpm_normalize, voxcpm_denoise, voxcpm_retry_badcase, voxcpm_retry_badcase_max_times,
+                voxcpm_retry_badcase_ratio_threshold, voxcpm_seed,
                 gain, eq_en, eq_b, eq_m, eq_t,
                 rev_en, rev_room, rev_damp, rev_wet,
                 echo_en, echo_del, echo_dec,
@@ -8459,6 +8977,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     higgs_ras_win_len, higgs_ras_win_max_num_repeat,
                     # KittenTTS parameters
                     kitten_voice,
+                    # VoxCPM parameters
+                    voxcpm_ref_audio, voxcpm_ref_text, voxcpm_cfg_value, voxcpm_inference_timesteps,
+                    voxcpm_normalize, voxcpm_denoise, voxcpm_retry_badcase, voxcpm_retry_badcase_max_times,
+                    voxcpm_retry_badcase_ratio_threshold, voxcpm_seed,
                     # Effects parameters
                     gain_db, enable_eq, eq_bass, eq_mid, eq_treble,
                     enable_reverb, reverb_room, reverb_damping, reverb_wet,
