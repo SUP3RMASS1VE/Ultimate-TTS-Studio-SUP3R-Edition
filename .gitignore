@@ -30,4 +30,15 @@ requirements_no_versions.txt
 
 # Output files
 outputs/
-*.log 
+*.log
+
+# User data and models
+models/
+checkpoints/
+cache/
+F5-Models/
+indextts/checkpoints/
+custom_voices/
+audiobooks/
+sample/
+
