@@ -222,52 +222,80 @@ This will automatically set up everything for you — dependencies, environment,
 
 ## Option 3
 
-❌THIS NEEDS UPDATING❌ USE ABOVE METHODS FOR NOW. 
+---
 
-### 1. Clone the repository
+## 🧠 Ultimate-TTS-Studio-SUP3R-Edition — Setup Guide (Conda)
+
+Follow these steps to set up your environment for **Ultimate TTS Studio SUP3R Edition** using **Conda** and **UV** for fast dependency management.
+
+---
+
+### 🔹 1. Clone the Repository
 
 ```bash
 git clone https://github.com/SUP3RMASS1VE/Ultimate-TTS-Studio-SUP3R-Edition.git
 cd Ultimate-TTS-Studio-SUP3R-Edition
-```
+````
 
-### 2. Create a Python virtual environment
+---
+
+### 🔹 2. Create a Conda Environment
 
 ```bash
-python -m venv env
+conda create -n ultimate-tts python=3.10 -y
 ```
 
-### 3. Activate the environment
+---
 
-* **Windows**:
+### 🔹 3. Activate the Environment
 
-  ```bash
-  env\Scripts\activate
-  ```
+```bash
+conda activate ultimate-tts
+```
 
-### 4. Install `uv` (optional but recommended for speed)
+---
+
+### 🔹 4. (Optional) Install `uv` for Faster Installs
 
 ```bash
 pip install uv
 ```
 
-### 5. Install dependencies
+> 💡 **Tip:** `uv` dramatically speeds up installation. If you prefer, you can use regular `pip install` instead.
 
-#### Install PyTorch (CUDA 12.8 build)
+---
 
-```bash
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-```
+### 🔹 5. Install Dependencies
 
-#### Install other requirements
+#### 🧩 Step 1 — Core Requirements
 
 ```bash
 uv pip install -r requirements.txt
 ```
 
-> 💡 If you're not using `uv`, you can just use `pip install` in its place.
+#### ⚙️ Step 2 — Specific Packages and CUDA Builds
 
----
+```bash
+uv pip install voxcpm openai-whisper --no-deps
+uv pip install https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4.post1%2Bcu128torch2.7.0cxx11abiFALSE-cp310-cp310-win_amd64.whl
+uv pip install WeTextProcessing --no-deps
+uv pip install triton-windows==3.3.1.post19
+uv pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
+
+```
+
+
+### ✅ Done!
+
+Your environment is now ready to run **Ultimate TTS Studio SUP3R Edition** with CUDA 12.8 support.
+Launch the app and start generating high-quality speech!
+
+💡 If you encounter CUDA or package conflicts, ensure your GPU drivers are updated and that Conda’s `python=3.10` matches the wheel compatibility.
+
+
+
+💡 If you're not using `uv`, you can just use `pip install` in its place.
+
 
 ## 🧠 First-Time Setup Tips
 
