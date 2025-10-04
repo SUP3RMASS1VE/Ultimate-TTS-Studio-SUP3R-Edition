@@ -139,7 +139,7 @@ This update brings key improvements to **performance**, **model management**, an
 🐟 Natural TTS with Audio Effects
 🎵 Real-time Voice Synthesis & Export
 
----
+---. 
 
 ## 🚀 Features
 
@@ -167,6 +167,7 @@ This update brings key improvements to **performance**, **model management**, an
 > `ERROR: Failed building wheel for pynini`
 > You can fix this by installing it via conda:
 > Pynini and wetextprocessing is needed for index-tts to work at its best
+> [Espeak-ng](https://github.com/espeak-ng/espeak-ng) is needed for Kokoro to work at its best.
 
 ```bash
 # After activating your conda environment (e.g., conda activate index-tts)
@@ -221,7 +222,7 @@ This will automatically set up everything for you — dependencies, environment,
 
 ## Option 3
 
-[Espeak-ng](https://github.com/espeak-ng/espeak-ng) is needed for Kokoro to work at its best.
+❌THIS NEEDS UPDATING❌ USE ABOVE METHODS FOR NOW. 
 
 ### 1. Clone the repository
 
