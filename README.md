@@ -1,6 +1,30 @@
 ## 💖 Support & Donations
 
-If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing development, your generosity is deeply appreciated. Any amount — big or small — makes a difference!
+If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing development, your generosity is deeply appreciated.  
+Any amount — big or small — makes a difference!
+
+### 💰 Donate via PayPal
+
+<table>
+  <tr>
+    <td width="160">
+      <a href="https://paypal.me/30second?country.x=GB&locale.x=en_GB" target="_blank">
+        <img src="https://www.paypalobjects.com/webstatic/mktg/Logo/pp-logo-100px.png" alt="Donate with PayPal" width="120"/>
+      </a>
+    </td>
+    <td style="padding-left: 15px;">
+      <p>
+        Support this project securely via <strong>PayPal</strong>.<br>
+        Click below to make a one-time or recurring donation:
+      </p>
+      <p>
+        <a href="https://paypal.me/30second?country.x=GB&locale.x=en_GB" target="_blank">
+          👉 <strong>paypal.me/30second</strong>
+        </a>
+      </p>
+    </td>
+  </tr>
+</table>
 
 ### 🪙 Bitcoin Donations Welcome
 
@@ -8,7 +32,7 @@ If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing
 
 <table>
   <tr>
-    <td>
+    <td width="160">
       <img src="https://github.com/user-attachments/assets/a93b7a18-1a42-461c-bbe2-466f425ce350" alt="Donate via Bitcoin" width="150"/>
     </td>
     <td style="padding-left: 20px;">
@@ -16,8 +40,8 @@ If you enjoy using **Ultimate TTS Studio** and would like to support its ongoing
       <ul>
         <li>🧠 Development time and continuous feature updates</li>
         <li>💾 Storage upgrades and data handling</li>
-        <li>🧾 Ongoing subscription costs that support development tools and AI services</li>
-        <li>🚀 Hardware improvements like GPU upgrades for faster and more powerful models</li>
+        <li>🧾 Subscription costs for dev tools and AI services</li>
+        <li>🚀 Hardware improvements (e.g., GPU upgrades)</li>
       </ul>
       <p>
         Every contribution directly supports the creation of more innovative apps like this.<br>
