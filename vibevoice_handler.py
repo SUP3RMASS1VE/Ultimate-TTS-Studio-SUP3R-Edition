@@ -301,6 +301,11 @@ class VibeVoiceHandler:
             
             # Verify file was saved
             if os.path.exists(output_path):
+                # Update the demo's available_voices dictionary if demo is initialized
+                if self.demo and hasattr(self.demo, 'available_voices'):
+                    self.demo.available_voices[f"custom-{voice_name}"] = output_path
+                    print(f"✅ Updated demo's available_voices dictionary with '{f'custom-{voice_name}'}'")
+                
                 return f"✅ Successfully added custom voice '{voice_name}' ({duration:.1f}s)\n💡 You can now select it in the Speaker dropdowns!"
             else:
                 return "❌ Failed to save voice file"
@@ -347,6 +352,11 @@ class VibeVoiceHandler:
 
             print(f"\n🔄 Starting VibeVoice generation...")
             print(f"⏳ This may take several minutes depending on script length...")
+
+            # Refresh voice presets to ensure custom voices are available
+            if hasattr(self.demo, 'setup_voice_presets'):
+                self.demo.setup_voice_presets()
+                print(f"✅ Refreshed voice presets. Available voices: {len(self.demo.available_voices)}")
 
             # Collect all results from streaming generator
             final_audio = None
