@@ -9,8 +9,14 @@ import warnings
 import re
 import json
 import io
+import logging
 from datetime import datetime
 from pathlib import Path
+
+# Suppress redirect warning on Windows/MacOS
+warnings.filterwarnings("ignore", message="Redirects are currently not supported")
+os.environ["TORCH_DISTRIBUTED_DEBUG"] = "OFF"
+logging.getLogger("torch.distributed.elastic").setLevel(logging.ERROR)
 
 # ===== COMPREHENSIVE WARNING SUPPRESSION =====
 # Suppress all warnings to clean up console output
@@ -6336,7 +6342,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                         speaker_2_sad = gr.Slider(0, 1, 0, step=0.1, label="😢 Sad")
                                     with gr.Row():
                                         speaker_2_angry = gr.Slider(0, 1, 0, step=0.1, label="😠 Angry")
-                                        speaker_2_afraid = gr.Slider(0, 1, 0, step=0.1, label="�28 Afraid")
+                                        speaker_2_afraid = gr.Slider(0, 1, 0, step=0.1, label=" 28 Afraid")
                                     with gr.Row():
                                         speaker_2_surprised = gr.Slider(0, 1, 0, step=0.1, label="😲 Surprised")
                                         speaker_2_calm = gr.Slider(0, 1, 1, step=0.1, label="😌 Calm")
