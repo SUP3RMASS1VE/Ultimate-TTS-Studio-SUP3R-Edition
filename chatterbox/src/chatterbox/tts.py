@@ -3,9 +3,9 @@ from pathlib import Path
 
 import librosa
 import torch
-
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
 
 from .models.t3 import T3
 from .models.s3tokenizer import S3_SR, drop_invalid_tokens
@@ -96,6 +96,8 @@ class Conditionals:
 
     @classmethod
     def load(cls, fpath, map_location="cpu"):
+        if isinstance(map_location, str):
+            map_location = torch.device(map_location)
         kwargs = torch.load(fpath, map_location=map_location, weights_only=True)
         return cls(T3Cond(**kwargs['t3']), kwargs['gen'])
 
@@ -125,14 +127,20 @@ class ChatterboxTTS:
     def from_local(cls, ckpt_dir, device) -> 'ChatterboxTTS':
         ckpt_dir = Path(ckpt_dir)
 
+        # Always load to CPU first for non-CUDA devices to handle CUDA-saved models
+        if device in ["cpu", "mps"]:
+            map_location = torch.device('cpu')
+        else:
+            map_location = None
+
         ve = VoiceEncoder()
         ve.load_state_dict(
-            torch.load(ckpt_dir / "ve.pt")
+            load_file(ckpt_dir / "ve.safetensors")
         )
         ve.to(device).eval()
 
         t3 = T3()
-        t3_state = torch.load(ckpt_dir / "t3_cfg.pt")
+        t3_state = load_file(ckpt_dir / "t3_cfg.safetensors")
         if "model" in t3_state.keys():
             t3_state = t3_state["model"][0]
         t3.load_state_dict(t3_state)
@@ -140,7 +148,7 @@ class ChatterboxTTS:
 
         s3gen = S3Gen()
         s3gen.load_state_dict(
-            torch.load(ckpt_dir / "s3gen.pt")
+            load_file(ckpt_dir / "s3gen.safetensors"), strict=False
         )
         s3gen.to(device).eval()
 
@@ -150,13 +158,21 @@ class ChatterboxTTS:
 
         conds = None
         if (builtin_voice := ckpt_dir / "conds.pt").exists():
-            conds = Conditionals.load(builtin_voice).to(device)
+            conds = Conditionals.load(builtin_voice, map_location=map_location).to(device)
 
         return cls(t3, s3gen, ve, tokenizer, device, conds=conds)
 
     @classmethod
     def from_pretrained(cls, device) -> 'ChatterboxTTS':
-        for fpath in ["ve.pt", "t3_cfg.pt", "s3gen.pt", "tokenizer.json", "conds.pt"]:
+        # Check if MPS is available on macOS
+        if device == "mps" and not torch.backends.mps.is_available():
+            if not torch.backends.mps.is_built():
+                print("MPS not available because the current PyTorch install was not built with MPS enabled.")
+            else:
+                print("MPS not available because the current MacOS version is not 12.3+ and/or you do not have an MPS-enabled device on this machine.")
+            device = "cpu"
+
+        for fpath in ["ve.safetensors", "t3_cfg.safetensors", "s3gen.safetensors", "tokenizer.json", "conds.pt"]:
             local_path = hf_hub_download(repo_id=REPO_ID, filename=fpath)
 
         return cls.from_local(Path(local_path).parent, device)
@@ -190,6 +206,9 @@ class ChatterboxTTS:
     def generate(
         self,
         text,
+        repetition_penalty=1.2,
+        min_p=0.05,
+        top_p=1.0,
         audio_prompt_path=None,
         exaggeration=0.5,
         cfg_weight=0.5,
@@ -212,7 +231,9 @@ class ChatterboxTTS:
         # Norm and tokenize text
         text = punc_norm(text)
         text_tokens = self.tokenizer.text_to_tokens(text).to(self.device)
-        text_tokens = torch.cat([text_tokens, text_tokens], dim=0)  # Need two seqs for CFG
+
+        if cfg_weight > 0.0:
+            text_tokens = torch.cat([text_tokens, text_tokens], dim=0)  # Need two seqs for CFG
 
         sot = self.t3.hp.start_text_token
         eot = self.t3.hp.stop_text_token
@@ -226,12 +247,18 @@ class ChatterboxTTS:
                 max_new_tokens=1000,  # TODO: use the value in config
                 temperature=temperature,
                 cfg_weight=cfg_weight,
+                repetition_penalty=repetition_penalty,
+                min_p=min_p,
+                top_p=top_p,
             )
             # Extract only the conditional batch.
             speech_tokens = speech_tokens[0]
 
             # TODO: output becomes 1D
             speech_tokens = drop_invalid_tokens(speech_tokens)
+            
+            speech_tokens = speech_tokens[speech_tokens < 6561]
+
             speech_tokens = speech_tokens.to(self.device)
 
             wav, _ = self.s3gen.inference(

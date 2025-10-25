@@ -114,9 +114,12 @@ with suppress_specific_warnings():
 try:
     with suppress_specific_warnings():
         from chatterbox.src.chatterbox.tts import ChatterboxTTS
+        from chatterbox.src.chatterbox.mtl_tts import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES
     CHATTERBOX_AVAILABLE = True
+    CHATTERBOX_MULTILINGUAL_AVAILABLE = True
 except ImportError:
     CHATTERBOX_AVAILABLE = False
+    CHATTERBOX_MULTILINGUAL_AVAILABLE = False
     print("⚠️ ChatterboxTTS not available. Some features will be disabled.")
 
 # Kokoro imports
@@ -664,6 +667,24 @@ def generate_conversation_audio_simple(
                         0,    # seed
                         0.5,  # cfg_weight
                         300,  # chunk_size
+                        effects_settings,
+                        audio_format,
+                        skip_file_saving=True
+                    )
+                elif selected_engine == 'Chatterbox Multilingual':
+                    print(f"🌍 Using Chatterbox Multilingual for {speaker}")
+                    result = generate_chatterbox_multilingual_tts(
+                        text,
+                        "en",  # language_id - default to English, could be made configurable
+                        ref_audio or '',
+                        0.5,   # exaggeration
+                        0.8,   # temperature
+                        0,     # seed
+                        0.5,   # cfg_weight
+                        2.0,   # repetition_penalty
+                        0.05,  # min_p
+                        1.0,   # top_p
+                        300,   # chunk_size
                         effects_settings,
                         audio_format,
                         skip_file_saving=True
@@ -1881,6 +1902,7 @@ if not os.path.exists(audiobooks_folder):
 
 # ===== MODEL INITIALIZATION =====
 CHATTERBOX_MODEL = None
+CHATTERBOX_MULTILINGUAL_MODEL = None
 KOKORO_PIPELINES = {}
 FISH_SPEECH_ENGINE = None
 FISH_SPEECH_LLAMA_QUEUE = None
@@ -1890,6 +1912,7 @@ loaded_voices = {}
 # Model loading status
 MODEL_STATUS = {
     'chatterbox': {'loaded': False, 'loading': False},
+    'chatterbox_multilingual': {'loaded': False, 'loading': False},
     'kokoro': {'loaded': False, 'loading': False},
     'vibevoice': {'loaded': False, 'loading': False},
     'fish_speech': {'loaded': False, 'loading': False},
@@ -1946,6 +1969,55 @@ def unload_chatterbox():
         return "✅ ChatterboxTTS unloaded - memory freed"
     except Exception as e:
         error_msg = f"❌ Error unloading ChatterboxTTS: {e}"
+        print(error_msg)
+        return error_msg
+
+def init_chatterbox_multilingual():
+    """Initialize ChatterboxMultilingualTTS model."""
+    global CHATTERBOX_MULTILINGUAL_MODEL, MODEL_STATUS
+    if not CHATTERBOX_MULTILINGUAL_AVAILABLE:
+        return False, "❌ ChatterboxMultilingualTTS not available - check installation"
+    
+    if MODEL_STATUS['chatterbox_multilingual']['loaded']:
+        return True, "✅ ChatterboxMultilingualTTS already loaded"
+    
+    if MODEL_STATUS['chatterbox_multilingual']['loading']:
+        return False, "⏳ ChatterboxMultilingualTTS is currently loading..."
+    
+    try:
+        MODEL_STATUS['chatterbox_multilingual']['loading'] = True
+        print("🔄 Loading ChatterboxMultilingualTTS...")
+        with suppress_specific_warnings():
+            CHATTERBOX_MULTILINGUAL_MODEL = ChatterboxMultilingualTTS.from_pretrained(DEVICE)
+        MODEL_STATUS['chatterbox_multilingual']['loaded'] = True
+        MODEL_STATUS['chatterbox_multilingual']['loading'] = False
+        print("✅ ChatterboxMultilingualTTS loaded successfully")
+        return True, "✅ ChatterboxMultilingualTTS loaded successfully"
+    except Exception as e:
+        MODEL_STATUS['chatterbox_multilingual']['loading'] = False
+        error_msg = f"❌ Failed to load ChatterboxMultilingualTTS: {e}"
+        print(error_msg)
+        return False, error_msg
+
+def unload_chatterbox_multilingual():
+    """Unload ChatterboxMultilingualTTS model to free memory."""
+    global CHATTERBOX_MULTILINGUAL_MODEL, MODEL_STATUS
+    try:
+        if CHATTERBOX_MULTILINGUAL_MODEL is not None:
+            del CHATTERBOX_MULTILINGUAL_MODEL
+            CHATTERBOX_MULTILINGUAL_MODEL = None
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
+        
+        MODEL_STATUS['chatterbox_multilingual']['loaded'] = False
+        print("✅ ChatterboxMultilingualTTS unloaded successfully")
+        return "✅ ChatterboxMultilingualTTS unloaded - memory freed"
+    except Exception as e:
+        error_msg = f"❌ Error unloading ChatterboxMultilingualTTS: {e}"
         print(error_msg)
         return error_msg
 
@@ -2783,6 +2855,108 @@ def generate_chatterbox_tts(
     except Exception as e:
         return None, f"❌ ChatterboxTTS error: {str(e)}"
 
+def generate_chatterbox_multilingual_tts(
+    text_input: str,
+    language_id: str,
+    audio_prompt_path_input: str,
+    exaggeration_input: float,
+    temperature_input: float,
+    seed_num_input: int,
+    cfgw_input: float,
+    repetition_penalty_input: float,
+    min_p_input: float,
+    top_p_input: float,
+    chunk_size_input: int,
+    effects_settings=None,
+    audio_format: str = "wav",
+    skip_file_saving: bool = False
+):
+    """Generate TTS audio using ChatterboxMultilingualTTS."""
+    if not CHATTERBOX_MULTILINGUAL_AVAILABLE:
+        return None, "❌ ChatterboxMultilingualTTS not available - check installation"
+    
+    if not MODEL_STATUS['chatterbox_multilingual']['loaded'] or CHATTERBOX_MULTILINGUAL_MODEL is None:
+        return None, "❌ ChatterboxMultilingualTTS not loaded - please load the model first"
+    
+    try:
+        print(f"🌍 Multilingual TTS - Language: {language_id}, Ref Audio: {audio_prompt_path_input}")
+        if seed_num_input != 0:
+            set_seed(int(seed_num_input))
+        
+        # Split text into chunks
+        text_chunks = split_text_into_chunks(text_input, max_chunk_length=chunk_size_input)
+        audio_chunks = []
+        
+        # Generate audio chunks with progress information
+        print(f"🎙️ Generating ChatterboxMultilingualTTS audio for {len(text_chunks)} chunk(s) in {language_id}...")
+        if len(text_chunks) == 1:
+            print("📊 Progress information will appear below during generation...")
+        
+        for i, chunk in enumerate(text_chunks):
+            if len(text_chunks) > 1:
+                print(f"📝 Processing chunk {i+1}/{len(text_chunks)}: {chunk[:50]}...")
+            
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                warnings.filterwarnings("ignore", category=DeprecationWarning)
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                
+                wav = CHATTERBOX_MULTILINGUAL_MODEL.generate(
+                    chunk,
+                    language_id=language_id,
+                    audio_prompt_path=audio_prompt_path_input,
+                    exaggeration=exaggeration_input,
+                    temperature=temperature_input,
+                    cfg_weight=cfgw_input,
+                    repetition_penalty=repetition_penalty_input,
+                    min_p=min_p_input,
+                    top_p=top_p_input,
+                )
+                audio_chunks.append(wav.squeeze(0).numpy())
+            
+            if len(text_chunks) > 1:
+                print(f"✅ Chunk {i+1}/{len(text_chunks)} completed")
+        
+        # Concatenate chunks
+        if len(audio_chunks) == 1:
+            final_audio = audio_chunks[0]
+        else:
+            silence_samples = int(CHATTERBOX_MULTILINGUAL_MODEL.sr * 0.05)
+            silence = np.zeros(silence_samples)
+            
+            concatenated_chunks = []
+            for i, chunk in enumerate(audio_chunks):
+                concatenated_chunks.append(chunk)
+                if i < len(audio_chunks) - 1:
+                    concatenated_chunks.append(silence)
+            
+            final_audio = np.concatenate(concatenated_chunks)
+        
+        # Apply effects
+        if effects_settings:
+            final_audio = apply_audio_effects(final_audio, CHATTERBOX_MULTILINGUAL_MODEL.sr, effects_settings)
+        
+        # Save audio file in specified format (skip if requested, e.g., for audiobook chunks)
+        if skip_file_saving:
+            status_message = f"✅ Generated with ChatterboxMultilingualTTS ({language_id})"
+        else:
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename_base = f"chatterbox_mtl_{language_id}_{timestamp}"
+                filepath, filename = save_audio_with_format(
+                    final_audio, CHATTERBOX_MULTILINGUAL_MODEL.sr, audio_format, output_folder, filename_base
+                )
+                status_message = f"✅ Generated with ChatterboxMultilingualTTS ({language_id}) - Saved as: {filename}"
+            except Exception as e:
+                print(f"Warning: Could not save audio file: {e}")
+                status_message = f"✅ Generated with ChatterboxMultilingualTTS ({language_id}) (file saving failed)"
+        
+        return (CHATTERBOX_MULTILINGUAL_MODEL.sr, final_audio), status_message
+        
+    except Exception as e:
+        return None, f"❌ ChatterboxMultilingualTTS error: {str(e)}"
+
 # ===== FISH SPEECH TTS FUNCTIONS =====
 def enhance_audio_clarity(audio_data, sample_rate, enhancement_strength=1.0):
     """Enhance audio clarity and reduce muffled sound for Fish Speech."""
@@ -2995,7 +3169,7 @@ def generate_fish_speech_tts(
         return None, "❌ Fish Speech not loaded - please load the model first"
     
     try:
-        from fish_speech.text import split_text
+        from fish_speech.text.spliter import split_text
         
         # Prepare reference audio if provided
         references = []
@@ -3872,6 +4046,16 @@ def convert_ebook_to_audiobook(
     chatterbox_temperature: float = 0.8,
     chatterbox_cfg_weight: float = 0.5,
     chatterbox_seed: int = 0,
+    # Chatterbox Multilingual parameters
+    chatterbox_mtl_ref_audio: str = None,
+    chatterbox_mtl_language: str = "en",
+    chatterbox_mtl_exaggeration: float = 0.5,
+    chatterbox_mtl_temperature: float = 0.8,
+    chatterbox_mtl_cfg_weight: float = 0.5,
+    chatterbox_mtl_repetition_penalty: float = 2.0,
+    chatterbox_mtl_min_p: float = 0.05,
+    chatterbox_mtl_top_p: float = 1.0,
+    chatterbox_mtl_seed: int = 0,
     # Kokoro parameters
     kokoro_voice: str = 'af_heart',
     kokoro_speed: float = 1.0,
@@ -4019,6 +4203,17 @@ def convert_ebook_to_audiobook(
                     chunk['content'], chatterbox_ref_audio, chatterbox_exaggeration,
                     chatterbox_temperature, chatterbox_seed, chatterbox_cfg_weight,
                     max_chunk_length, effects_settings, "wav", skip_file_saving=True  # Skip saving individual chunks
+                )
+            elif tts_engine == "Chatterbox Multilingual":
+                print(f"🌍 Using Chatterbox Multilingual with ref audio: {chatterbox_mtl_ref_audio}")
+                if not chatterbox_mtl_ref_audio:
+                    print("⚠️ No reference audio provided - using default voice")
+                audio_result, status = generate_chatterbox_multilingual_tts(
+                    chunk['content'], chatterbox_mtl_language, chatterbox_mtl_ref_audio,
+                    chatterbox_mtl_exaggeration, chatterbox_mtl_temperature, chatterbox_mtl_seed,
+                    chatterbox_mtl_cfg_weight, chatterbox_mtl_repetition_penalty,
+                    chatterbox_mtl_min_p, chatterbox_mtl_top_p,
+                    max_chunk_length, effects_settings, "wav", skip_file_saving=True
                 )
             elif tts_engine == "Kokoro TTS":
                 audio_result, status = generate_kokoro_tts(
@@ -4436,6 +4631,17 @@ def generate_unified_tts(
     chatterbox_cfg_weight: float = 0.5,
     chatterbox_chunk_size: int = 300,
     chatterbox_seed: int = 0,
+    # Chatterbox Multilingual parameters
+    chatterbox_mtl_ref_audio: str = None,
+    chatterbox_mtl_language: str = "en",
+    chatterbox_mtl_exaggeration: float = 0.5,
+    chatterbox_mtl_temperature: float = 0.8,
+    chatterbox_mtl_cfg_weight: float = 0.5,
+    chatterbox_mtl_repetition_penalty: float = 2.0,
+    chatterbox_mtl_min_p: float = 0.05,
+    chatterbox_mtl_top_p: float = 1.0,
+    chatterbox_mtl_chunk_size: int = 300,
+    chatterbox_mtl_seed: int = 0,
     # Kokoro parameters
     kokoro_voice: str = 'af_heart',
     kokoro_speed: float = 1.0,
@@ -4547,6 +4753,14 @@ def generate_unified_tts(
             text_input, chatterbox_ref_audio, chatterbox_exaggeration,
             chatterbox_temperature, chatterbox_seed, chatterbox_cfg_weight,
             chatterbox_chunk_size, effects_settings, audio_format
+        )
+    elif tts_engine == "Chatterbox Multilingual":
+        return generate_chatterbox_multilingual_tts(
+            text_input, chatterbox_mtl_language, chatterbox_mtl_ref_audio,
+            chatterbox_mtl_exaggeration, chatterbox_mtl_temperature, chatterbox_mtl_seed,
+            chatterbox_mtl_cfg_weight, chatterbox_mtl_repetition_penalty,
+            chatterbox_mtl_min_p, chatterbox_mtl_top_p, chatterbox_mtl_chunk_size,
+            effects_settings, audio_format
         )
     elif tts_engine == "Kokoro TTS":
         return generate_kokoro_tts(
@@ -4785,7 +4999,8 @@ def create_gradio_interface():
                 inset 0 0 0 1px var(--border-color) !important;
             transition: all 0.3s ease !important;
             position: relative;
-            overflow: hidden;
+            overflow: visible;
+            z-index: 1;
         }
         
         .card:hover, .settings-card:hover, .gr-group:hover {
@@ -4888,23 +5103,13 @@ def create_gradio_interface():
         /* Dropdown specific fixes */
         .gr-dropdown {
             position: relative !important;
-            z-index: 100 !important;
-            isolation: isolate !important;
+            z-index: 9999 !important;
         }
         
         /* Ensure dropdown container allows overflow and is stable */
         .gr-dropdown > div,
         .gr-dropdown .wrap {
             position: relative !important;
-            z-index: 100 !important;
-            contain: layout !important;
-        }
-        
-        /* Prevent dropdown from moving during interactions */
-        .gr-dropdown,
-        .gr-dropdown * {
-            backface-visibility: hidden !important;
-            transform-style: preserve-3d !important;
         }
         
         /* Dropdown menu styling - Multiple selectors for better compatibility */
@@ -4932,6 +5137,7 @@ def create_gradio_interface():
             width: 100% !important;
             transform: none !important;
             transition: none !important;
+            pointer-events: auto !important;
         }
         
         /* Dropdown items */
@@ -4974,7 +5180,6 @@ def create_gradio_interface():
         .gr-accordion,
         .gradio-container {
             overflow: visible !important;
-            position: relative !important;
         }
         
         /* Specific fix for accordion content */
@@ -4982,22 +5187,24 @@ def create_gradio_interface():
             overflow: visible !important;
         }
         
-        /* Prevent parent hover effects from affecting dropdown positioning */
-        .gr-group:hover .gr-dropdown,
-        .card:hover .gr-dropdown,
-        .settings-card:hover .gr-dropdown {
+        /* When a card/group contains a dropdown, increase its z-index and disable transforms */
+        .card:has(.gr-dropdown),
+        .settings-card:has(.gr-dropdown),
+        .gr-group:has(.gr-dropdown) {
+            z-index: 9998 !important;
+            overflow: visible !important;
+        }
+        
+        .card:has(.gr-dropdown):hover,
+        .settings-card:has(.gr-dropdown):hover,
+        .gr-group:has(.gr-dropdown):hover {
             transform: none !important;
         }
         
-        /* Ensure dropdown stays in place during parent transforms */
-        .gr-dropdown {
-            will-change: auto !important;
-        }
-        
-        /* Override any transform effects on dropdown containers */
-        .gr-group:hover,
-        .card:hover,
-        .settings-card:hover {
+        /* Prevent parent hover effects from affecting dropdown */
+        .gr-group:hover .gr-dropdown,
+        .card:hover .gr-dropdown,
+        .settings-card:hover .gr-dropdown {
             transform: none !important;
         }
         
@@ -5013,6 +5220,16 @@ def create_gradio_interface():
             text-align: left !important;
             position: relative !important;
             z-index: 1 !important;
+            transform: none !important;
+        }
+        
+        /* Prevent any parent transforms from affecting dropdown positioning */
+        .gr-dropdown,
+        .gr-dropdown > *,
+        .gr-dropdown .wrap,
+        .gr-dropdown .wrap > * {
+            transform: none !important;
+            will-change: auto !important;
         }
         
         .gr-dropdown button:hover,
@@ -5789,6 +6006,32 @@ def create_gradio_interface():
                             scale=1
                         )
                 
+                # ChatterboxTTS Multilingual Management - Compact
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("🌍 **Chatterbox Multi**", elem_classes=["fade-in"])
+                        chatterbox_mtl_status = gr.Markdown(
+                            value="⭕ Not loaded" if CHATTERBOX_MULTILINGUAL_AVAILABLE else "❌ Not available",
+                            elem_classes=["fade-in"]
+                        )
+                    with gr.Row():
+                        load_chatterbox_mtl_btn = gr.Button(
+                            "🔄 Load",
+                            variant="primary",
+                            size="sm",
+                            visible=CHATTERBOX_MULTILINGUAL_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                        unload_chatterbox_mtl_btn = gr.Button(
+                            "🗑️ Unload",
+                            variant="secondary",
+                            size="sm",
+                            visible=CHATTERBOX_MULTILINGUAL_AVAILABLE,
+                            elem_classes=["fade-in"],
+                            scale=1
+                        )
+                
                 # Kokoro TTS Management - Compact
                 with gr.Column():
                     with gr.Row():
@@ -6530,7 +6773,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     
                                     # eBook information display
                                     ebook_info = gr.Markdown(
-                                        value="Upload an eBook file and click 'Analyze eBook' to see details.",
+                                        value="Upload an eBook file and click 'Analyze eBook' to see details.\n\n💡 **Tip:** To use voice cloning, upload reference audio in the **ChatterboxTTS tab** before converting.",
                                         elem_classes=["fade-in"]
                                     )
                                     
@@ -6550,6 +6793,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                     ebook_tts_engine = gr.Radio(
                                         choices=[
                                             ("🎤 ChatterboxTTS", "ChatterboxTTS"),
+                                            ("🌍 Chatterbox Multilingual", "Chatterbox Multilingual"),
                                             ("🗣️ Kokoro TTS", "Kokoro TTS"),
                                             ("🐟 Fish Speech", "Fish Speech"),
                                             ("🎯 IndexTTS", "IndexTTS"),
@@ -6904,6 +7148,7 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 tts_engine = gr.Radio(
                     choices=[
                         ("🎤 ChatterboxTTS - Voice Cloning", "ChatterboxTTS"),
+                        ("🌍 Chatterbox Multilingual - 23 Languages", "Chatterbox Multilingual"),
                         ("🗣️ Kokoro TTS - Pre-trained Voices", "Kokoro TTS"),
                         ("🐟 Fish Speech - Natural TTS", "Fish Speech"),
                         ("🎯 IndexTTS - Industrial Quality", "IndexTTS"),
@@ -7065,6 +7310,123 @@ Alice: I went to Japan. It was absolutely incredible!""",
                         chatterbox_cfg_weight = gr.Slider(visible=False, value=0.5)
                         chatterbox_chunk_size = gr.Slider(visible=False, value=300)
                         chatterbox_seed = gr.Number(visible=False, value=0)
+            
+            # Chatterbox Multilingual Tab
+            with gr.TabItem("🌍 Chatterbox Multilingual", id="chatterbox_mtl_tab"):
+                if CHATTERBOX_MULTILINGUAL_AVAILABLE:
+                    with gr.Group() as chatterbox_mtl_controls:
+                        gr.Markdown("**🌍 Chatterbox Multilingual - Voice cloning in 23 languages**")
+                        gr.Markdown("*💡 Supports: Arabic, Chinese, Danish, Dutch, English, Finnish, French, German, Greek, Hebrew, Hindi, Italian, Japanese, Korean, Malay, Norwegian, Polish, Portuguese, Russian, Spanish, Swahili, Swedish, Turkish*", elem_classes=["fade-in"])
+                        
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                chatterbox_mtl_ref_audio = gr.Audio(
+                                    sources=["upload", "microphone"],
+                                    type="filepath",
+                                    label="🎤 Reference Audio File (Optional)",
+                                    value=None,
+                                    elem_classes=["fade-in"]
+                                )
+                            
+                            with gr.Column(scale=1):
+                                with gr.Accordion("🌍 Language", open=False, elem_classes=["fade-in"]):
+                                    chatterbox_mtl_language = gr.Radio(
+                                        choices=[
+                                            ("🇸🇦 Arabic", "ar"),
+                                            ("🇨🇳 Chinese", "zh"),
+                                            ("🇩🇰 Danish", "da"),
+                                            ("🇳🇱 Dutch", "nl"),
+                                            ("🇬🇧 English", "en"),
+                                            ("🇫🇮 Finnish", "fi"),
+                                            ("🇫🇷 French", "fr"),
+                                            ("🇩🇪 German", "de"),
+                                            ("🇬🇷 Greek", "el"),
+                                            ("🇮🇱 Hebrew", "he"),
+                                            ("🇮🇳 Hindi", "hi"),
+                                            ("🇮🇹 Italian", "it"),
+                                            ("🇯🇵 Japanese", "ja"),
+                                            ("🇰🇷 Korean", "ko"),
+                                            ("🇲🇾 Malay", "ms"),
+                                            ("🇳🇴 Norwegian", "no"),
+                                            ("🇵🇱 Polish", "pl"),
+                                            ("🇵🇹 Portuguese", "pt"),
+                                            ("🇷🇺 Russian", "ru"),
+                                            ("🇪🇸 Spanish", "es"),
+                                            ("🇹🇿 Swahili", "sw"),
+                                            ("🇸🇪 Swedish", "sv"),
+                                            ("🇹🇷 Turkish", "tr")
+                                        ],
+                                        value="en",
+                                        label="Select target language",
+                                        elem_classes=["fade-in"]
+                                    )
+                                chatterbox_mtl_exaggeration = gr.Slider(
+                                    0.25, 2, step=0.05,
+                                    label="🎭 Exaggeration",
+                                    value=0.5,
+                                    info="Higher = more dramatic",
+                                    elem_classes=["fade-in"]
+                                )
+                        
+                        with gr.Accordion("🔧 Advanced Multilingual Settings", open=False, elem_classes=["fade-in"]):
+                            with gr.Row():
+                                chatterbox_mtl_temperature = gr.Slider(
+                                    0.05, 5, step=0.05,
+                                    label="🌡️ Temperature",
+                                    value=0.8,
+                                    info="Higher = more creative"
+                                )
+                                chatterbox_mtl_cfg_weight = gr.Slider(
+                                    0.0, 1, step=0.05,
+                                    label="⚡ CFG Weight",
+                                    value=0.5,
+                                    info="Speed vs quality"
+                                )
+                                chatterbox_mtl_chunk_size = gr.Slider(
+                                    100, 400, step=25,
+                                    label="📄 Chunk Size",
+                                    value=300,
+                                    info="Characters per chunk"
+                                )
+                            with gr.Row():
+                                chatterbox_mtl_repetition_penalty = gr.Slider(
+                                    1.0, 3.0, step=0.1,
+                                    label="🔁 Repetition Penalty",
+                                    value=2.0,
+                                    info="Reduce repetitions"
+                                )
+                                chatterbox_mtl_min_p = gr.Slider(
+                                    0.0, 0.5, step=0.01,
+                                    label="📊 Min P",
+                                    value=0.05,
+                                    info="Minimum probability threshold"
+                                )
+                                chatterbox_mtl_top_p = gr.Slider(
+                                    0.5, 1.0, step=0.05,
+                                    label="🎯 Top P",
+                                    value=1.0,
+                                    info="Nucleus sampling"
+                                )
+                                chatterbox_mtl_seed = gr.Number(
+                                    value=0,
+                                    label="🎲 Seed (0=random)",
+                                    info="For reproducible results"
+                                )
+                else:
+                    # Placeholder when Chatterbox Multilingual is not available
+                    with gr.Group():
+                        gr.Markdown("<div style='text-align: center; padding: 40px; opacity: 0.5;'>**🌍 Chatterbox Multilingual** - ⚠️ Not available - please check installation</div>")
+                        # Create dummy components to maintain consistent interface
+                        chatterbox_mtl_ref_audio = gr.Audio(visible=False, value=None)
+                        chatterbox_mtl_language = gr.Radio(visible=False, value="en", choices=[("English", "en")])
+                        chatterbox_mtl_exaggeration = gr.Slider(visible=False, value=0.5)
+                        chatterbox_mtl_temperature = gr.Slider(visible=False, value=0.8)
+                        chatterbox_mtl_cfg_weight = gr.Slider(visible=False, value=0.5)
+                        chatterbox_mtl_repetition_penalty = gr.Slider(visible=False, value=2.0)
+                        chatterbox_mtl_min_p = gr.Slider(visible=False, value=0.05)
+                        chatterbox_mtl_top_p = gr.Slider(visible=False, value=1.0)
+                        chatterbox_mtl_chunk_size = gr.Slider(visible=False, value=300)
+                        chatterbox_mtl_seed = gr.Number(visible=False, value=0)
             
             # Kokoro TTS Tab
             with gr.TabItem("🗣️ Kokoro TTS", id="kokoro_tab"):
@@ -7831,6 +8193,30 @@ Alice: I went to Japan. It was absolutely incredible!""",
             # Don't change engine selection when unloading
             return chatterbox_status_text
         
+        def handle_load_chatterbox_multilingual():
+            success, message = init_chatterbox_multilingual()
+            if success:
+                chatterbox_mtl_status_text = "✅ Loaded (Auto-selected)"
+                # Auto-select Chatterbox Multilingual engine when loaded
+                selected_engine = "Chatterbox Multilingual"
+                # Auto-switch to Chatterbox Multilingual tab
+                selected_tab = gr.update(selected="chatterbox_mtl_tab")
+            else:
+                chatterbox_mtl_status_text = "❌ Failed to load"
+                selected_engine = gr.update()  # No change to current selection
+                selected_tab = gr.update()  # No tab change
+            
+            if EBOOK_CONVERTER_AVAILABLE:
+                return chatterbox_mtl_status_text, selected_engine, selected_engine, selected_tab
+            else:
+                return chatterbox_mtl_status_text, selected_engine, selected_tab
+        
+        def handle_unload_chatterbox_multilingual():
+            message = unload_chatterbox_multilingual()
+            chatterbox_mtl_status_text = "⭕ Not loaded"
+            # Don't change engine selection when unloading
+            return chatterbox_mtl_status_text
+        
         def handle_load_kokoro():
             success, message = init_kokoro()
             if success:
@@ -8115,6 +8501,17 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 outputs=[chatterbox_status]
             )
         
+        # Chatterbox Multilingual management
+        if CHATTERBOX_MULTILINGUAL_AVAILABLE:
+            load_chatterbox_mtl_btn.click(
+                fn=handle_load_chatterbox_multilingual,
+                outputs=[chatterbox_mtl_status, tts_engine, ebook_tts_engine, engine_tabs] if EBOOK_CONVERTER_AVAILABLE else [chatterbox_mtl_status, tts_engine, engine_tabs]
+            )
+            unload_chatterbox_mtl_btn.click(
+                fn=handle_unload_chatterbox_multilingual,
+                outputs=[chatterbox_mtl_status]
+            )
+        
         # Kokoro TTS management
         if KOKORO_AVAILABLE:
             load_kokoro_btn.click(
@@ -8370,6 +8767,9 @@ Alice: I went to Japan. It was absolutely incredible!""",
                 text, tts_engine, audio_format,
                 chatterbox_ref_audio, chatterbox_exaggeration, chatterbox_temperature,
                 chatterbox_cfg_weight, chatterbox_chunk_size, chatterbox_seed,
+                chatterbox_mtl_ref_audio, chatterbox_mtl_language, chatterbox_mtl_exaggeration,
+                chatterbox_mtl_temperature, chatterbox_mtl_cfg_weight, chatterbox_mtl_repetition_penalty,
+                chatterbox_mtl_min_p, chatterbox_mtl_top_p, chatterbox_mtl_chunk_size, chatterbox_mtl_seed,
                 kokoro_voice, kokoro_speed,
                 fish_ref_audio, fish_ref_text, fish_temperature, fish_top_p, fish_repetition_penalty, fish_max_tokens, fish_seed,
                 indextts_ref_audio, indextts_temperature, indextts_seed,
@@ -8857,6 +9257,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 file_path, tts_engine_choice, selected_chapters, chunk_length, ebook_format,
                 # All the TTS parameters need to be passed through
                 cb_ref_audio, cb_exag, cb_temp, cb_cfg, cb_seed,
+                # Chatterbox Multilingual parameters
+                cb_mtl_ref_audio, cb_mtl_lang, cb_mtl_exag, cb_mtl_temp, cb_mtl_cfg,
+                cb_mtl_rep_pen, cb_mtl_min_p, cb_mtl_top_p, cb_mtl_seed,
                 kok_voice, kok_speed,
                 fish_ref_audio, fish_ref_text, fish_temp, fish_top_p, fish_rep_pen, fish_max_tok, fish_seed_val,
                 # IndexTTS parameters
@@ -8894,6 +9297,9 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                 result = convert_ebook_to_audiobook(
                     file_path, tts_engine_choice, selected_chapters, chunk_length, ebook_format,
                     cb_ref_audio, cb_exag, cb_temp, cb_cfg, cb_seed,
+                    # Chatterbox Multilingual parameters
+                    cb_mtl_ref_audio, cb_mtl_lang, cb_mtl_exag, cb_mtl_temp, cb_mtl_cfg,
+                    cb_mtl_rep_pen, cb_mtl_min_p, cb_mtl_top_p, cb_mtl_seed,
                     kok_voice, kok_speed,
                     fish_ref_audio, fish_ref_text, fish_temp, fish_top_p, fish_rep_pen, fish_max_tok, fish_seed_val,
                     # IndexTTS parameters
@@ -8961,6 +9367,10 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
                     # ChatterboxTTS parameters
                     chatterbox_ref_audio, chatterbox_exaggeration, chatterbox_temperature,
                     chatterbox_cfg_weight, chatterbox_seed,
+                    # Chatterbox Multilingual parameters
+                    chatterbox_mtl_ref_audio, chatterbox_mtl_language, chatterbox_mtl_exaggeration,
+                    chatterbox_mtl_temperature, chatterbox_mtl_cfg_weight, chatterbox_mtl_repetition_penalty,
+                    chatterbox_mtl_min_p, chatterbox_mtl_top_p, chatterbox_mtl_seed,
                     # Kokoro parameters
                     kokoro_voice, kokoro_speed,
                     # Fish Speech parameters
