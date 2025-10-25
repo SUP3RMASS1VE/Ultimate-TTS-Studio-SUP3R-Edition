@@ -1,3 +1,10 @@
+class AttrDict(dict):
+    """Dictionary subclass that allows attribute-style access to dictionary items."""
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
+
+
 # import numpy as np
 #
 #
