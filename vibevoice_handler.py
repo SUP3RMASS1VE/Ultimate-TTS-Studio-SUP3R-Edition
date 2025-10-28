@@ -153,8 +153,11 @@ class VibeVoiceHandler:
     def download_model(self, model_name: str = "VibeVoice-1.5B") -> Tuple[bool, str]:
         """Download a VibeVoice model from HuggingFace"""
         try:
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import snapshot_download, HfApi
             import os
+            import sys
+            import time
+            import threading
             
             # Model repository mapping
             model_repos = {
@@ -176,19 +179,98 @@ class VibeVoiceHandler:
                 return True, f"✅ Model {model_name} already exists at {local_dir}"
             
             print(f"📥 Downloading {model_name} from HuggingFace...")
+            print(f"📦 Repository: {repo_id}")
+            print(f"📁 Destination: {local_dir}")
             
-            # Download the model
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=local_dir,
-                local_dir_use_symlinks=False
-            )
+            # Get file list and sizes from HuggingFace
+            try:
+                api = HfApi()
+                repo_info = api.list_repo_files(repo_id=repo_id)
+                print(f"📋 Found {len(repo_info)} files to download")
+            except:
+                print(f"📋 Fetching file list...")
             
-            print(f"✅ Successfully downloaded {model_name}")
+            print(f"⏳ This may take a while depending on your internet connection...")
+            print(f"🔄 Download starting...\n")
+            sys.stdout.flush()
+            
+            # Progress monitoring
+            start_time = time.time()
+            initial_size = self._get_dir_size(local_dir) if os.path.exists(local_dir) else 0
+            download_complete = threading.Event()
+            
+            def monitor_progress():
+                """Monitor and print download progress"""
+                last_size = initial_size
+                last_time = start_time
+                update_count = 0
+                
+                while not download_complete.is_set():
+                    time.sleep(3)  # Update every 3 seconds
+                    current_size = self._get_dir_size(local_dir)
+                    current_time = time.time()
+                    
+                    if current_size > last_size:
+                        downloaded_mb = (current_size - initial_size) / (1024 * 1024)
+                        elapsed = current_time - start_time
+                        speed_mb = (current_size - last_size) / (1024 * 1024) / (current_time - last_time)
+                        
+                        # Create progress indicator
+                        dots = "." * (update_count % 4)
+                        spaces = " " * (3 - (update_count % 4))
+                        
+                        print(f"⬇️  Downloading{dots}{spaces} | {downloaded_mb:.1f} MB | {speed_mb:.1f} MB/s | {elapsed:.0f}s elapsed")
+                        sys.stdout.flush()
+                        
+                        last_size = current_size
+                        last_time = current_time
+                        update_count += 1
+            
+            # Start progress monitor thread
+            monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
+            monitor_thread.start()
+            
+            try:
+                # Download the model
+                snapshot_download(
+                    repo_id=repo_id,
+                    local_dir=local_dir,
+                    local_dir_use_symlinks=False,
+                    resume_download=True
+                )
+            finally:
+                # Stop progress monitor
+                download_complete.set()
+                monitor_thread.join(timeout=1)
+            
+            # Calculate final stats
+            elapsed_time = time.time() - start_time
+            final_size = self._get_dir_size(local_dir)
+            downloaded_mb = (final_size - initial_size) / (1024 * 1024)
+            
+            print(f"\n✅ Successfully downloaded {model_name}")
+            print(f"⏱️  Time elapsed: {elapsed_time:.1f} seconds")
+            print(f"💾 Downloaded: {downloaded_mb:.1f} MB")
+            if elapsed_time > 0:
+                print(f"⚡ Average speed: {downloaded_mb/elapsed_time:.1f} MB/s")
+            
             return True, f"✅ Successfully downloaded {model_name} to {local_dir}"
             
         except Exception as e:
             return False, f"❌ Error downloading model: {str(e)}"
+    
+    def _get_dir_size(self, path: str) -> int:
+        """Get total size of directory in bytes"""
+        total = 0
+        try:
+            for entry in os.scandir(path):
+                if entry.is_file(follow_symlinks=False):
+                    total += entry.stat().st_size
+                elif entry.is_dir(follow_symlinks=False):
+                    total += self._get_dir_size(entry.path)
+        except:
+            pass
+        return total
     
     def get_available_voices(self) -> List[str]:
         """Get list of available voice presets"""
