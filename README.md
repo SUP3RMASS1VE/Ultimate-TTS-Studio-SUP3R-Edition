@@ -148,11 +148,7 @@ This update brings key improvements to **performance**, **model management**, an
 * Use the **Custom Voice Upload** section in the Kokoro interface to upload your own compatible voice files.
 
 ---
-![Screenshot 2025-06-22 183117](https://github.com/user-attachments/assets/fb0d87cf-1289-4dd1-9e51-0a8aa2f8fbc9)
-![Screenshot 2025-06-22 183134](https://github.com/user-attachments/assets/30999da1-0c51-4030-978e-30e311781f79)
-![Screenshot 2025-06-22 183147](https://github.com/user-attachments/assets/d78b3aa4-09f7-4845-80c9-d621f32f7d56)
-
-
+<img width="1801" height="1239" alt="Screenshot 2025-10-29 224206" src="https://github.com/user-attachments/assets/c5b61290-3dc0-4cde-bbf3-7c151714717c" />
 
 # ✨ Ultimate TTS Studio SUP3R Edition ✨
 
