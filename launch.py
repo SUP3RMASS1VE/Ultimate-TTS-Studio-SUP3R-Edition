@@ -4826,7 +4826,39 @@ def create_gradio_interface():
             secondary_hue="blue",
             neutral_hue="gray",
             font=[gr.themes.GoogleFont("Inter"), "system-ui", "sans-serif"],
+        ).set(
+            body_background_fill="*neutral_950",
+            body_background_fill_dark="*neutral_950",
         ),
+        js="""
+        () => {
+            // Force dark mode on page load
+            document.body.classList.remove('light');
+            document.body.classList.add('dark');
+            
+            // Override any theme preference detection
+            const style = document.createElement('style');
+            style.textContent = `
+                .light { display: none !important; }
+                body, .gradio-container { color-scheme: dark !important; }
+            `;
+            document.head.appendChild(style);
+            
+            // Set localStorage to persist dark mode
+            localStorage.setItem('theme', 'dark');
+            
+            // Watch for theme changes and revert to dark
+            const observer = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.attributeName === 'class' && document.body.classList.contains('light')) {
+                        document.body.classList.remove('light');
+                        document.body.classList.add('dark');
+                    }
+                });
+            });
+            observer.observe(document.body, { attributes: true });
+        }
+        """,
         css="""
         /* CSS Variables for Theme Support */
         :root {
@@ -4840,70 +4872,49 @@ def create_gradio_interface():
             --gradient-bg: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
         }
         
-        /* Light Mode Variables */
+        /* Force Dark Mode Variables for Light Mode */
         .light :root,
         [data-theme="light"] :root,
-        .gradio-container.light {
-            --text-primary: rgba(0, 0, 0, 0.9);
-            --text-secondary: rgba(0, 0, 0, 0.7);
-            --text-muted: rgba(0, 0, 0, 0.6);
-            --bg-primary: rgba(0, 0, 0, 0.05);
-            --bg-secondary: rgba(0, 0, 0, 0.03);
-            --border-color: rgba(0, 0, 0, 0.1);
-            --accent-color: #5a67d8;
-            --gradient-bg: linear-gradient(135deg, #f7fafc 0%, #edf2f7 50%, #e2e8f0 100%);
-        }
-        
-        /* Auto-detect light mode */
-        @media (prefers-color-scheme: light) {
-            :root {
-                --text-primary: rgba(0, 0, 0, 0.9);
-                --text-secondary: rgba(0, 0, 0, 0.7);
-                --text-muted: rgba(0, 0, 0, 0.6);
-                --bg-primary: rgba(0, 0, 0, 0.05);
-                --bg-secondary: rgba(0, 0, 0, 0.03);
-                --border-color: rgba(0, 0, 0, 0.1);
-                --accent-color: #5a67d8;
-                --gradient-bg: linear-gradient(135deg, #f7fafc 0%, #edf2f7 50%, #e2e8f0 100%);
-            }
-        }
-        
-        /* Gradio light mode detection */
-        .gradio-container[data-theme="light"],
         .gradio-container.light,
-        body[data-theme="light"] .gradio-container,
-        body.light .gradio-container {
-            --text-primary: rgba(0, 0, 0, 0.9) !important;
-            --text-secondary: rgba(0, 0, 0, 0.7) !important;
-            --text-muted: rgba(0, 0, 0, 0.6) !important;
-            --bg-primary: rgba(0, 0, 0, 0.05) !important;
-            --bg-secondary: rgba(0, 0, 0, 0.03) !important;
-            --border-color: rgba(0, 0, 0, 0.1) !important;
-            --accent-color: #5a67d8 !important;
-            --gradient-bg: linear-gradient(135deg, #f7fafc 0%, #edf2f7 50%, #e2e8f0 100%) !important;
+        .gradio-container[data-theme="light"],
+        body.light,
+        body[data-theme="light"] {
+            --text-primary: rgba(255, 255, 255, 0.9) !important;
+            --text-secondary: rgba(255, 255, 255, 0.7) !important;
+            --text-muted: rgba(255, 255, 255, 0.6) !important;
+            --bg-primary: rgba(255, 255, 255, 0.05) !important;
+            --bg-secondary: rgba(255, 255, 255, 0.03) !important;
+            --border-color: rgba(255, 255, 255, 0.1) !important;
+            --accent-color: #667eea !important;
+            --gradient-bg: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important;
+            
+            /* Override Gradio default light theme vars */
+            --body-background-fill: transparent !important;
+            --background-fill-primary: rgba(255, 255, 255, 0.05) !important;
+            --background-fill-secondary: rgba(255, 255, 255, 0.03) !important;
+            --block-background-fill: rgba(255, 255, 255, 0.05) !important;
+            --block-border-color: rgba(255, 255, 255, 0.1) !important;
+            --block-label-text-color: rgba(255, 255, 255, 0.9) !important;
+            --input-background-fill: rgba(255, 255, 255, 0.05) !important;
+            --input-border-color: rgba(255, 255, 255, 0.1) !important;
+            --input-placeholder-color: rgba(255, 255, 255, 0.5) !important;
+            --neutral-50: #1f2937 !important;
+            --neutral-100: #374151 !important;
+            --neutral-200: #4b5563 !important;
+            --neutral-300: #9ca3af !important;
+            --neutral-400: #d1d5db !important;
+            --neutral-500: #e5e7eb !important;
+            --neutral-600: #f3f4f6 !important;
+            --neutral-700: #f9fafb !important;
+            --neutral-800: #ffffff !important;
+            --neutral-900: #ffffff !important;
+            --neutral-950: #ffffff !important;
         }
         
-        /* Force light mode styles when body has light class */
-        body.light .gradio-container *,
-        body[data-theme="light"] .gradio-container *,
-        .gradio-container.light *,
-        .gradio-container[data-theme="light"] * {
-            color: var(--text-primary) !important;
-        }
-        
-        /* Specific overrides for light mode text visibility */
-        body.light .gr-markdown,
-        body[data-theme="light"] .gr-markdown,
-        .gradio-container.light .gr-markdown,
-        .gradio-container[data-theme="light"] .gr-markdown {
-            color: rgba(0, 0, 0, 0.9) !important;
-        }
-        
-        body.light label,
-        body[data-theme="light"] label,
-        .gradio-container.light label,
-        .gradio-container[data-theme="light"] label {
-            color: rgba(0, 0, 0, 0.9) !important;
+        /* Force background for light mode */
+        body.light, .gradio-container.light {
+            background: var(--gradient-bg) !important;
+            color: white !important;
         }
         
         /* Global Styles */
@@ -4932,15 +4943,7 @@ def create_gradio_interface():
             z-index: 0;
         }
         
-        /* Light mode background adjustment */
-        @media (prefers-color-scheme: light) {
-            .gradio-container::before {
-                background-image: 
-                    radial-gradient(circle at 20% 80%, rgba(120, 119, 198, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 40% 40%, rgba(120, 219, 255, 0.08) 0%, transparent 50%);
-            }
-        }
+        /* Light mode background adjustment removed */
         
         @keyframes gradientShift {
             0%, 100% { transform: rotate(0deg) scale(1); }
@@ -5691,16 +5694,7 @@ def create_gradio_interface():
             }
         }
         
-        /* Additional light mode fixes */
-        .light .main-title,
-        [data-theme="light"] .main-title {
-            text-shadow: 0 0 40px rgba(102, 126, 234, 0.3) !important;
-        }
-        
-        .light .subtitle,
-        [data-theme="light"] .subtitle {
-            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.1) !important;
-        }
+        /* Additional light mode fixes removed */
         
         /* Dark Theme Overrides */
         .dark {
@@ -5732,16 +5726,8 @@ def create_gradio_interface():
         // Theme detection and handling
         function updateTheme() {
             const container = document.querySelector('.gradio-container');
-            const body = document.body;
-            
-            // Check for Gradio's theme classes
-            if (body.classList.contains('light') || 
-                body.hasAttribute('data-theme') && body.getAttribute('data-theme') === 'light' ||
-                container && (container.classList.contains('light') || 
-                container.hasAttribute('data-theme') && container.getAttribute('data-theme') === 'light')) {
-                container.classList.add('light');
-                container.setAttribute('data-theme', 'light');
-            } else {
+            if (container) {
+                // Always enforce dark mode by removing light class/attribute
                 container.classList.remove('light');
                 container.removeAttribute('data-theme');
             }
