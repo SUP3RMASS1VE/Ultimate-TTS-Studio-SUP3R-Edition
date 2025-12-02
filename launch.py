@@ -306,14 +306,14 @@ def unload_kitten_tts_model():
         return f"⚠️ Error unloading KittenTTS: {str(e)}"
 
 # ===== VIBEVOICE MODEL MANAGEMENT =====
-def init_vibevoice_model(model_path: str = "models/VibeVoice-1.5B"):
+def init_vibevoice_model(model_path: str = "models/VibeVoice-1.5B", use_flash_attention: bool = False):
     """Initialize VibeVoice model"""
     if not VIBEVOICE_AVAILABLE:
         return False, "❌ VibeVoice not available"
     
     try:
         MODEL_STATUS['vibevoice'] = {'loading': True}
-        success, message = init_vibevoice(model_path)
+        success, message = init_vibevoice(model_path, use_flash_attention=use_flash_attention)
         if success:
             MODEL_STATUS['vibevoice'] = {'loaded': True, 'loading': False}
             return True, "✅ VibeVoice model loaded successfully"
@@ -7032,6 +7032,13 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                                 elem_classes=["fade-in"]
                                             )
                                             
+                                            vibevoice_flash_attention = gr.Checkbox(
+                                                label="⚡ Use Flash Attention",
+                                                value=False,
+                                                info="Set this BEFORE loading the model. Requires compatible GPU, may not work on all systems.",
+                                                elem_classes=["fade-in"]
+                                            )
+                                            
                                             with gr.Row():
                                                 vibevoice_load_btn = gr.Button(
                                                     "🔄 Load Model",
@@ -9451,12 +9458,12 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
             )
             
             # Model management
-            def handle_vibevoice_load(selected_model_path, path):
+            def handle_vibevoice_load(selected_model_path, path, use_flash_attention):
                 # Prefer radio selection; fall back to manual path
                 effective_path = selected_model_path or path
                 if not effective_path:
                     return "❌ No model path selected"
-                success, message = init_vibevoice_model(effective_path)
+                success, message = init_vibevoice_model(effective_path, use_flash_attention=use_flash_attention)
                 return message
             
             def handle_vibevoice_unload():
@@ -9464,7 +9471,7 @@ Alice: Definitely visit Kyoto and try authentic ramen!"""
             
             vibevoice_load_btn.click(
                 fn=handle_vibevoice_load,
-                inputs=[vibevoice_downloaded_models, vibevoice_model_path],
+                inputs=[vibevoice_downloaded_models, vibevoice_model_path, vibevoice_flash_attention],
                 outputs=[vibevoice_model_status]
             )
             
