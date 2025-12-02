@@ -2118,7 +2118,7 @@ def init_fish_speech():
         checkpoint_path = "checkpoints/openaudio-s1-mini"
         if not os.path.exists(checkpoint_path):
             MODEL_STATUS['fish_speech']['loading'] = False
-            error_msg = "❌ Fish Speech checkpoints not found. Please download them first:\nhuggingface-cli download fishaudio/openaudio-s1-mini --local-dir checkpoints/openaudio-s1-mini"
+            error_msg = "❌ Fish Speech checkpoints not found. Please download them first:\nhuggingface-cli download cocktailpeanut/oa --local-dir ./checkpoints/openaudio-s1-mini"
             print(error_msg)
             return False, error_msg
         
