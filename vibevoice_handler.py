@@ -71,7 +71,7 @@ class VibeVoiceHandler:
         except Exception as e:
             return False, f"❌ Error initializing VibeVoice: {str(e)}"
     
-    def load_model(self, model_path: str = None) -> Tuple[bool, str]:
+    def load_model(self, model_path: str = None, use_flash_attention: bool = False) -> Tuple[bool, str]:
         """Load a VibeVoice model"""
         if not self.demo:
             success, msg = self.initialize_demo(model_path or "models/VibeVoice-1.5B")
@@ -83,7 +83,10 @@ class VibeVoiceHandler:
                 self.demo.model_path = model_path
                 self.current_model_path = model_path
             
+            # Set flash attention preference before loading
+            self.demo.use_flash_attention = use_flash_attention
             print(f"🔄 Loading VibeVoice model from: {self.current_model_path}")
+            print(f"⚡ Flash Attention: {'Enabled' if use_flash_attention else 'Disabled'}")
             
             self.demo.load_model()
             
@@ -594,10 +597,10 @@ def generate_vibevoice_podcast(num_speakers: int,
         audio_format=audio_format
     )
 
-def init_vibevoice(model_path: str = "models/VibeVoice-1.5B") -> Tuple[bool, str]:
+def init_vibevoice(model_path: str = "models/VibeVoice-1.5B", use_flash_attention: bool = False) -> Tuple[bool, str]:
     """Initialize VibeVoice with a model"""
     handler = get_vibevoice_handler()
-    return handler.load_model(model_path)
+    return handler.load_model(model_path, use_flash_attention=use_flash_attention)
 
 def unload_vibevoice() -> str:
     """Unload VibeVoice model"""
