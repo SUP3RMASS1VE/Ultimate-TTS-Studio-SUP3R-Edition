@@ -71,8 +71,8 @@ class VoxCPMHandler:
         self.model = None
         self.whisper_model = None
         self.device = self._get_device()
-        self.sample_rate = 16000
-        self.model_id = "openbmb/VoxCPM-0.5B"
+        self.sample_rate = 44100  # VoxCPM1.5 uses 44.1kHz Audio VAE
+        self.model_id = "openbmb/VoxCPM1.5"
         self.checkpoints_dir = Path("checkpoints/voxcpm")
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         
@@ -502,16 +502,18 @@ class VoxCPMHandler:
             
         except Exception as e:
             import traceback
-            traceback.print_exc()
-            print(f"❌ Error generating speech: {e}")
-            return None, f"❌ Error generating speech: {str(e)}"
+            tb_str = traceback.format_exc()
+            print(f"❌ Full traceback:\n{tb_str}")
+            error_msg = str(e) if str(e) else f"Exception type: {type(e).__name__}"
+            print(f"❌ Error generating speech: {error_msg}")
+            return None, f"❌ Error generating speech: {error_msg}\n{tb_str}"
     
     def get_model_info(self) -> Dict[str, Any]:
         """Get information about the VoxCPM model"""
         return {
             'name': 'VoxCPM',
-            'version': '0.5B',
-            'description': 'VoxCPM Text-to-Speech with voice cloning capabilities',
+            'version': '1.5',
+            'description': 'VoxCPM 1.5 Text-to-Speech with voice cloning capabilities',
             'sample_rate': self.sample_rate,
             'supports_voice_cloning': True,
             'supports_emotion_control': False,

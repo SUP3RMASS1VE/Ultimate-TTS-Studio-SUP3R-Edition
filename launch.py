@@ -6155,7 +6155,7 @@ def create_gradio_interface():
                 # VoxCPM Management - Compact
                 with gr.Column():
                     with gr.Row():
-                        gr.Markdown("🎤 **VoxCPM (Can crash randomly)**", elem_classes=["fade-in"])
+                        gr.Markdown("🎤 **VoxCPM 1.5**", elem_classes=["fade-in"])
                         voxcpm_status = gr.Markdown(
                             value="⭕ Not loaded" if VOXCPM_AVAILABLE else "❌ Not available",
                             elem_classes=["fade-in"]
