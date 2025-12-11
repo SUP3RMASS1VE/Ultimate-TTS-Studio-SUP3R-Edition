@@ -4941,6 +4941,7 @@ def create_gradio_interface():
             animation: gradientShift 20s ease infinite;
             pointer-events: none;
             z-index: 0;
+            animation-play-state: paused;
         }
         
         /* Light mode background adjustment removed */
