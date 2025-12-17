@@ -7131,8 +7131,8 @@ Alice: I went to Japan. It was absolutely incredible!""",
                                             gr.Markdown("**📥 Download Models**")
                                             vibevoice_model_select = gr.Radio(
                                                 choices=[
-                                                    ("VibeVoice-1.5B (Compact, ~2.7B params)", "VibeVoice-1.5B"),
-                                                    ("VibeVoice-Large (High Quality, ~9.34B params)", "VibeVoice-Large")
+                                                    ("VIBEVOICE-1.5B (COMPACT)", "VibeVoice-1.5B"),
+                                                    ("VIBEVOICE-7B (HIGH QUALITY)", "VibeVoice-Large")
                                                 ],
                                                 value="VibeVoice-1.5B",
                                                 label="Select Model to Download",
