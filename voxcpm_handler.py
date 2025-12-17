@@ -5,9 +5,21 @@ Provides integration with VoxCPM Text-to-Speech system with voice cloning capabi
 
 import os
 import sys
+
+# CRITICAL: Disable torch dynamo/inductor BEFORE importing torch
+# This fixes CUDA graph assertion errors in VoxCPM
+os.environ['TORCHINDUCTOR_DISABLE'] = '1'
+os.environ['TORCH_COMPILE_DISABLE'] = '1'
+os.environ['TORCHDYNAMO_DISABLE'] = '1'
+
 import warnings
 import numpy as np
 import torch
+
+# Disable dynamo immediately after torch import
+torch._dynamo.config.suppress_errors = True
+torch._dynamo.config.disable = True
+
 import tempfile
 import json
 from pathlib import Path
@@ -450,18 +462,26 @@ class VoxCPMHandler:
                 print(f"🎲 Using seed {actual_seed} for chunk {i+1}")
                 
                 # Generate speech for this chunk
-                wav = self.model.generate(
-                    text=chunk,
-                    prompt_wav_path=prompt_wav_path,
-                    prompt_text=final_prompt_text,
-                    cfg_value=cfg_value,
-                    inference_timesteps=int(inference_timesteps),
-                    normalize=normalize,
-                    denoise=denoise,
-                    retry_badcase=retry_badcase,
-                    retry_badcase_max_times=int(retry_badcase_max_times),
-                    retry_badcase_ratio_threshold=retry_badcase_ratio_threshold
-                )
+                # Disable CUDA graphs and dynamo to avoid assertion errors
+                with torch.no_grad():
+                    # Reset dynamo state before each generation
+                    try:
+                        torch._dynamo.reset()
+                    except:
+                        pass
+                    
+                    wav = self.model.generate(
+                        text=chunk,
+                        prompt_wav_path=prompt_wav_path,
+                        prompt_text=final_prompt_text,
+                        cfg_value=cfg_value,
+                        inference_timesteps=int(inference_timesteps),
+                        normalize=normalize,
+                        denoise=denoise,
+                        retry_badcase=retry_badcase,
+                        retry_badcase_max_times=int(retry_badcase_max_times),
+                        retry_badcase_ratio_threshold=retry_badcase_ratio_threshold
+                    )
                 
                 # Convert to numpy if needed
                 if torch.is_tensor(wav):
