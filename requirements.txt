@@ -112,3 +112,7 @@ hf-xet
 openai-whisper
 simplejson
 sortedcontainers
+
+
+# Chatterbox-turbo
+pyloudnorm
