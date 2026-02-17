@@ -111,6 +111,9 @@ with suppress_specific_warnings():
     from scipy.io.wavfile import write
 
 # Chatterbox imports
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     with suppress_specific_warnings():
         from chatterbox.src.chatterbox.tts import ChatterboxTTS
